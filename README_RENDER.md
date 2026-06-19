@@ -4,48 +4,34 @@
 
 ## Render 服务类型
 
-- 类型：Web Service
-- 推荐 Runtime：Docker（仓库根目录提供 `Dockerfile`，可直接用于 Render Docker Web Service）
-- 可选 Runtime：Python 3（按下方 Build Command / Start Command 手动配置）
-- Root Directory：留空（使用仓库根目录）
-- 不使用 docker-compose
+请在 Render 创建 **Web Service**，并使用以下配置：
 
-## Docker Runtime（推荐）
+| 配置项 | 值 |
+| --- | --- |
+| Runtime | Docker |
+| Root Directory | 留空（使用仓库根目录） |
+| Dockerfile Path | `Dockerfile` |
+| Start Command | 留空，使用 Dockerfile 中的 `CMD` |
 
-Render 使用 Docker Runtime 时保持 Root Directory 为空即可，仓库根目录的 `Dockerfile` 会完成前端构建、后端依赖安装，并在同一个容器中启动 FastAPI。
+不要在 Render 上使用 docker-compose；Render 会直接基于仓库根目录的 `Dockerfile` 构建单容器服务。
 
-- Dockerfile Path：`Dockerfile`
-- Start Command：留空，使用镜像内的 `CMD`
+## Dockerfile 行为
 
-## Python Runtime（可选）Build Command
+仓库根目录的 `Dockerfile` 会执行以下步骤：
 
-```bash
-pip install -r backend/requirements.txt && cd frontend && npm ci && VITE_API_BASE=/api npm run build
-```
+1. 使用 Node 构建前端，并在构建时设置 `VITE_API_BASE=/api`。
+2. 使用 Python 镜像安装后端依赖。
+3. 将 `frontend/dist` 复制到最终镜像中。
+4. 启动 FastAPI，并监听 Render 注入的 `PORT`。
 
-说明：
-
-- `pip install -r backend/requirements.txt` 安装 FastAPI 后端依赖。
-- `npm ci` 安装前端依赖。
-- `VITE_API_BASE=/api npm run build` 将前端 API 地址编译为同源 `/api`，避免写死 `localhost`。
-
-## Python Runtime（可选）Start Command
-
-```bash
-cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT
-```
-
-说明：
-
-- Render 会自动注入 `PORT` 环境变量。
-- 后端必须监听 `0.0.0.0`，否则 Render 无法从外部访问服务。
+因此 Render 上不需要手动填写 Build Command 或 Start Command。
 
 ## 环境变量
 
 | Key | Value | 必填 | 说明 |
 | --- | --- | --- | --- |
-| `PORT` | Render 自动注入 | 是 | 不需要手动设置，Start Command 读取 `$PORT` |
-| `VITE_API_BASE` | `/api` | 建议 | Build Command 中已内联设置；如果在 Render 环境变量里配置，也应填 `/api` |
+| `PORT` | Render 自动注入 | 是 | 不需要手动设置，Dockerfile 中的 `CMD` 会读取 `${PORT:-8000}` |
+| `VITE_API_BASE` | 不需要手动设置 | 否 | Dockerfile 构建前端时已内联使用 `/api` |
 
 ## 部署后验证
 
