@@ -11,9 +11,12 @@ from zipfile import ZIP_DEFLATED, ZipFile
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from openpyxl import Workbook
 
-APP_ROOT = Path(__file__).resolve().parents[1]
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = BACKEND_ROOT.parent
+STATIC_DIR = REPO_ROOT / "frontend" / "dist"
 TMP_ROOT = Path("/tmp/ai_extractor")
 UPLOAD_DIR = TMP_ROOT / "uploads"
 EXPORT_DIR = TMP_ROOT / "exports"
@@ -127,3 +130,7 @@ async def export_result(format_name: str, payload: dict[str, Any]) -> FileRespon
         target.write_text(json.dumps({"error": "unsupported format"}, ensure_ascii=False), encoding="utf-8")
 
     return FileResponse(target, filename=target.name)
+
+
+if STATIC_DIR.exists():
+    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="frontend")
