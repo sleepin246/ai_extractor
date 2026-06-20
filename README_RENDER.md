@@ -11,6 +11,7 @@
 | Runtime | Docker |
 | Root Directory | 留空（使用仓库根目录） |
 | Dockerfile Path | `Dockerfile` |
+| Build Command | 留空，Render 会自动执行 Dockerfile 构建 |
 | Start Command | 留空，使用 Dockerfile 中的 `CMD` |
 
 不要在 Render 上使用 docker-compose；Render 会直接基于仓库根目录的 `Dockerfile` 构建单容器服务。
@@ -24,7 +25,7 @@
 3. 将 `frontend/dist` 复制到最终镜像中。
 4. 启动 FastAPI，并监听 Render 注入的 `PORT`。
 
-因此 Render 上不需要手动填写 Build Command 或 Start Command。
+因此 Render 上的 Build Command 和 Start Command 都留空：Build Command 由 Dockerfile 构建流程接管，Start Command 使用 Dockerfile 内置的 `CMD`。
 
 ## 环境变量
 
