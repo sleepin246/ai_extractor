@@ -22,13 +22,15 @@ docker-compose.yml
 
 ## Render 部署
 
-请查看 [`README_RENDER.md`](./README_RENDER.md)。Render 上填写：
+Render 部署以 [`README_RENDER.md`](./README_RENDER.md) 为唯一说明来源，避免在多个文档里维护不同配置。当前推荐配置是 Docker Web Service：
 
-- Build Command：`pip install -r backend/requirements.txt && cd frontend && npm ci && VITE_API_BASE=/api npm run build`
-- Start Command：`cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT`
-- 环境变量：`VITE_API_BASE=/api`（可选，Build Command 已内联）；`PORT` 由 Render 自动注入
+- Runtime：Docker
+- Root Directory：留空
+- Dockerfile Path：`Dockerfile`
+- Build Command：留空，Render 会自动执行 Dockerfile 构建
+- Start Command：留空，使用 Dockerfile 中的 `CMD`
 
-Render 构建 React 前端静态文件后，FastAPI 会在同一个 Web Service 中托管 `/api/*` 和前端页面。
+该镜像会构建 React 前端并由 FastAPI 在同一个 Web Service 中托管 `/api/*` 和前端页面。
 
 ## 本地启动
 

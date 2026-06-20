@@ -4,40 +4,35 @@
 
 ## Render 服务类型
 
-- 类型：Web Service
-- Runtime：Python 3
-- Root Directory：留空（使用仓库根目录）
-- 不使用 docker-compose
+请在 Render 创建 **Web Service**，并使用以下配置：
 
-## Build Command
+| 配置项 | 值 |
+| --- | --- |
+| Runtime | Docker |
+| Root Directory | 留空（使用仓库根目录） |
+| Dockerfile Path | `Dockerfile` |
+| Build Command | 留空，Render 会自动执行 Dockerfile 构建 |
+| Start Command | 留空，使用 Dockerfile 中的 `CMD` |
 
-```bash
-pip install -r backend/requirements.txt && cd frontend && npm ci && VITE_API_BASE=/api npm run build
-```
+不要在 Render 上使用 docker-compose；Render 会直接基于仓库根目录的 `Dockerfile` 构建单容器服务。
 
-说明：
+## Dockerfile 行为
 
-- `pip install -r backend/requirements.txt` 安装 FastAPI 后端依赖。
-- `npm ci` 安装前端依赖。
-- `VITE_API_BASE=/api npm run build` 将前端 API 地址编译为同源 `/api`，避免写死 `localhost`。
+仓库根目录的 `Dockerfile` 会执行以下步骤：
 
-## Start Command
+1. 使用 Node 构建前端，并在构建时设置 `VITE_API_BASE=/api`。
+2. 使用 Python 镜像安装后端依赖。
+3. 将 `frontend/dist` 复制到最终镜像中。
+4. 启动 FastAPI，并监听 Render 注入的 `PORT`。
 
-```bash
-cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT
-```
-
-说明：
-
-- Render 会自动注入 `PORT` 环境变量。
-- 后端必须监听 `0.0.0.0`，否则 Render 无法从外部访问服务。
+因此 Render 上的 Build Command 和 Start Command 都留空：Build Command 由 Dockerfile 构建流程接管，Start Command 使用 Dockerfile 内置的 `CMD`。
 
 ## 环境变量
 
 | Key | Value | 必填 | 说明 |
 | --- | --- | --- | --- |
-| `PORT` | Render 自动注入 | 是 | 不需要手动设置，Start Command 读取 `$PORT` |
-| `VITE_API_BASE` | `/api` | 建议 | Build Command 中已内联设置；如果在 Render 环境变量里配置，也应填 `/api` |
+| `PORT` | Render 自动注入 | 是 | 不需要手动设置，Dockerfile 中的 `CMD` 会读取 `${PORT:-8000}` |
+| `VITE_API_BASE` | 不需要手动设置 | 否 | Dockerfile 构建前端时已内联使用 `/api` |
 
 ## 部署后验证
 
