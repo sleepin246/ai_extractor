@@ -247,12 +247,25 @@ async def call_vision_model_api(text: str, image_files: list[dict[str, Any]]) ->
 
     payload = build_vision_payload(STANDARD_IMAGE_EXTRACTION_PROMPT, image_files, text)
     headers = build_vision_headers()
-    async with httpx.AsyncClient(timeout=VISION_API_TIMEOUT_SECONDS) as client:
-        response = await client.post(api_url, headers=headers, json=payload)
-        response.raise_for_status()
-        response_payload = response.json()
-
-    return normalize_extraction_result(parse_json_from_model_response(response_payload))
+    try:
+        async with httpx.AsyncClient(timeout=VISION_API_TIMEOUT_SECONDS) as client:
+            response = await client.post(api_url, headers=headers, json=payload)
+            response.raise_for_status()
+            response_payload = response.json()
+        return normalize_extraction_result(parse_json_from_model_response(response_payload))
+    except json.JSONDecodeError:
+        body_preview = response.text[:200] if "response" in locals() else ""
+        return empty_image_extraction_result(
+            [
+                "Vision model API response was not valid JSON; "
+                f"status={getattr(response, 'status_code', 'unknown')}; body={body_preview}"
+            ],
+            image_files,
+        )
+    except httpx.HTTPError as exc:
+        return empty_image_extraction_result([f"Vision model API request failed: {exc}"], image_files)
+    except ValueError as exc:
+        return empty_image_extraction_result([f"Vision model API returned invalid JSON content: {exc}"], image_files)
 
 
 async def infer_structured_payload(text: str, files: list[dict[str, Any]]) -> dict[str, Any]:

@@ -81,7 +81,7 @@
 }
 ```
 
-如果未配置 `LLM_BASE_URL`，接口仍返回标准 JSON 结构，但会将图片字段标记为 `uncertain`，并在 `warnings` 中提示缺少视觉模型 API 配置。
+如果未配置 `LLM_BASE_URL`，或模型接口返回非 JSON / 请求失败，接口仍返回标准 JSON 结构，但会将图片字段标记为 `uncertain`，并在 `warnings` 中提示具体原因。
 
 ## POST /api/export/{format}
 

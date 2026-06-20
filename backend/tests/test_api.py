@@ -171,6 +171,47 @@ def test_vision_api_reads_llm_environment_variables(monkeypatch: Any) -> None:
     assert response.json()["data"]["result"]["document_info"]["title"] == "测试表"
 
 
+def test_vision_api_non_json_response_returns_warning(monkeypatch: Any) -> None:
+    class FakeResponse:
+        status_code = 200
+        text = "not json"
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            raise json.JSONDecodeError("Expecting value", self.text, 0)
+
+    class FakeAsyncClient:
+        def __init__(self, timeout: float) -> None:
+            return None
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+            return None
+
+        async def post(self, url: str, headers: dict[str, str], json: dict[str, Any]) -> FakeResponse:
+            return FakeResponse()
+
+    monkeypatch.setenv(main.LLM_BASE_URL_ENV, "https://llm.example.com/extract")
+    monkeypatch.setenv(main.LLM_MODEL_ENV, "vision-model-test")
+    monkeypatch.setattr(main.httpx, "AsyncClient", FakeAsyncClient)
+
+    response = client.post(
+        "/api/parse",
+        data={"text": "读取图片"},
+        files={"files": ("form.png", b"image-bytes", "image/png")},
+    )
+
+    assert response.status_code == 200
+    result = response.json()["data"]["result"]
+    assert result["sections"][0]["fields"][0]["status"] == "uncertain"
+    assert "not valid JSON" in result["warnings"][0]
+    assert "not json" in result["warnings"][0]
+
+
 def test_export_json_downloads_file() -> None:
     payload = {"data": {"summary": "demo", "fields": [{"key": "title", "value": "demo"}]}}
     response = client.post("/api/export/json", json=payload)
