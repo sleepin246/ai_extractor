@@ -14,8 +14,75 @@
 
 `multipart/form-data`，字段：
 
-- `text`: 可选文本
+- `text`: 可选文本，可作为图片抽取补充说明
 - `files`: 可选多文件，支持图片、语音、文档等 MVP 临时上传
+
+当上传文件包含 `image/*` 时，后端会进入图片结构化信息抽取流程。抽取流程使用供应商无关的 JSON HTTP API 适配方式，不绑定 OpenAI、Claude、Qwen、DeepSeek 或任何特定模型名称。
+
+### 图片抽取标准输出
+
+图片抽取结果必须是 JSON 对象，并统一规范为以下结构：
+
+```json
+{
+  "document_info": {
+    "title": "",
+    "id": "",
+    "confidence": 0
+  },
+  "sections": [
+    {
+      "section_name": "",
+      "fields": [
+        {
+          "field_name": "",
+          "field_value": "",
+          "status": "filled",
+          "source_hint": "来自图片的原始位置或描述"
+        }
+      ]
+    }
+  ],
+  "raw_text": "",
+  "warnings": []
+}
+```
+
+字段 `status` 只允许：
+
+- `filled`：明确识别到的值
+- `empty`：该位置确实存在但未填写
+- `uncertain`：无法识别或不清晰
+
+### 图片模型 API 配置
+
+后端只要求“输入图片 + 输出 JSON”，通过环境变量适配不同供应商或中间网关：
+
+| 环境变量 | 必填 | 说明 |
+| --- | --- | --- |
+| `AI_EXTRACTOR_VISION_API_URL` | 是 | 视觉模型或模型网关的 HTTP JSON API 地址 |
+| `AI_EXTRACTOR_VISION_API_KEY` | 否 | 可选密钥；设置后默认以 `Authorization: Bearer ...` 发送 |
+| `AI_EXTRACTOR_VISION_API_HEADERS_JSON` | 否 | 自定义请求头 JSON，用于适配不同网关鉴权方式 |
+| `AI_EXTRACTOR_VISION_API_PAYLOAD_TEMPLATE` | 否 | 请求体 JSON 模板，可使用 `$prompt`、`$images`、`$text` 占位符 |
+| `AI_EXTRACTOR_VISION_API_RESPONSE_JSON_PATH` | 否 | 当响应被包装时，用点路径取出真正的 JSON 文本或对象 |
+
+默认请求体为：
+
+```json
+{
+  "prompt": "...标准抽取提示词...",
+  "images": [
+    {
+      "filename": "form.png",
+      "content_type": "image/png",
+      "base64": "..."
+    }
+  ],
+  "text": "用户补充说明"
+}
+```
+
+如果未配置 `AI_EXTRACTOR_VISION_API_URL`，接口仍返回标准 JSON 结构，但会将图片字段标记为 `uncertain`，并在 `warnings` 中提示缺少视觉模型 API 配置。
 
 ## POST /api/export/{format}
 
