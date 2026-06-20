@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import httpx
+
 from fastapi.testclient import TestClient
 
 from app import main
@@ -169,6 +171,115 @@ def test_vision_api_reads_llm_environment_variables(monkeypatch: Any) -> None:
     assert captured["json"]["text"] == "读取图片"
     assert captured["json"]["images"][0]["base64"] == "aW1hZ2UtYnl0ZXM="
     assert response.json()["data"]["result"]["document_info"]["title"] == "测试表"
+
+
+def test_messages_api_url_uses_messages_payload_and_parses_content(monkeypatch: Any) -> None:
+    captured: dict[str, Any] = {}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps(
+                            {
+                                "document_info": {"title": "消息接口表", "id": "M-1", "confidence": 0.8},
+                                "sections": [],
+                                "raw_text": "消息接口表",
+                                "warnings": [],
+                            },
+                            ensure_ascii=False,
+                        ),
+                    }
+                ]
+            }
+
+    class FakeAsyncClient:
+        def __init__(self, timeout: float) -> None:
+            return None
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+            return None
+
+        async def post(self, url: str, headers: dict[str, str], json: dict[str, Any]) -> FakeResponse:
+            captured["url"] = url
+            captured["headers"] = headers
+            captured["json"] = json
+            return FakeResponse()
+
+    monkeypatch.setenv(main.LLM_BASE_URL_ENV, "https://api.vveai.com/v1/messages")
+    monkeypatch.setenv(main.LLM_API_KEY_ENV, "test-key")
+    monkeypatch.setenv(main.LLM_MODEL_ENV, "claude-compatible-vision")
+    monkeypatch.setattr(main.httpx, "AsyncClient", FakeAsyncClient)
+
+    response = client.post(
+        "/api/parse",
+        data={"text": "用户备注"},
+        files={"files": ("form.png", b"image-bytes", "image/png")},
+    )
+
+    assert response.status_code == 200
+    assert captured["url"] == "https://api.vveai.com/v1/messages"
+    assert captured["headers"]["anthropic-version"] == "2023-06-01"
+    assert captured["json"]["model"] == "claude-compatible-vision"
+    assert captured["json"]["max_tokens"] == 4096
+    assert captured["json"]["messages"][0]["role"] == "user"
+    content = captured["json"]["messages"][0]["content"]
+    assert content[0]["type"] == "text"
+    assert "用户备注" in content[0]["text"]
+    assert content[1]["type"] == "image"
+    assert content[1]["source"] == {
+        "type": "base64",
+        "media_type": "image/png",
+        "data": "aW1hZ2UtYnl0ZXM=",
+    }
+    assert response.json()["data"]["result"]["document_info"]["title"] == "消息接口表"
+
+
+def test_vision_api_http_error_includes_response_body(monkeypatch: Any) -> None:
+    class FakeResponse:
+        status_code = 400
+        text = "missing required field: messages"
+
+        def raise_for_status(self) -> None:
+            request = httpx.Request("POST", "https://api.vveai.com/v1/messages")
+            response = httpx.Response(self.status_code, request=request, text=self.text)
+            raise httpx.HTTPStatusError("Bad Request", request=request, response=response)
+
+    class FakeAsyncClient:
+        def __init__(self, timeout: float) -> None:
+            return None
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+            return None
+
+        async def post(self, url: str, headers: dict[str, str], json: dict[str, Any]) -> FakeResponse:
+            return FakeResponse()
+
+    monkeypatch.setenv(main.LLM_BASE_URL_ENV, "https://api.vveai.com/v1/messages")
+    monkeypatch.setenv(main.LLM_MODEL_ENV, "claude-compatible-vision")
+    monkeypatch.setattr(main.httpx, "AsyncClient", FakeAsyncClient)
+
+    response = client.post(
+        "/api/parse",
+        data={"text": "读取图片"},
+        files={"files": ("form.png", b"image-bytes", "image/png")},
+    )
+
+    assert response.status_code == 200
+    warning = response.json()["data"]["result"]["warnings"][0]
+    assert "status=400" in warning
+    assert "missing required field: messages" in warning
 
 
 def test_vision_api_non_json_response_returns_warning(monkeypatch: Any) -> None:

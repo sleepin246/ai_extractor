@@ -212,7 +212,69 @@ def parse_json_from_model_response(value: Any) -> Any:
     return json.loads(content)
 
 
-def build_vision_payload(prompt: str, image_files: list[dict[str, Any]], text: str) -> dict[str, Any]:
+def is_messages_api_url(api_url: str) -> bool:
+    return api_url.rstrip("/").endswith("/v1/messages")
+
+
+def build_user_prompt(prompt: str, text: str) -> str:
+    if text:
+        return f"{prompt}\n\n用户补充说明：\n{text}"
+    return prompt
+
+
+def redact_vision_payload(value: Any) -> Any:
+    if isinstance(value, dict):
+        redacted = {}
+        for key, item in value.items():
+            if key in {"base64", "data"} and isinstance(item, str):
+                redacted[key] = f"{item[:80]}...<truncated {len(item)} chars>"
+            else:
+                redacted[key] = redact_vision_payload(item)
+        return redacted
+    if isinstance(value, list):
+        return [redact_vision_payload(item) for item in value]
+    return value
+
+
+def print_vision_payload(payload: dict[str, Any]) -> None:
+    print(
+        "Vision model API payload: "
+        f"{json.dumps(redact_vision_payload(payload), ensure_ascii=False)}",
+        flush=True,
+    )
+
+
+def extract_model_output(response_payload: Any) -> Any:
+    if not isinstance(response_payload, dict):
+        return response_payload
+    if any(key in response_payload for key in ("document_info", "sections", "raw_text", "warnings")):
+        return response_payload
+
+    content = response_payload.get("content")
+    if isinstance(content, list):
+        text_blocks = []
+        for block in content:
+            if isinstance(block, dict) and isinstance(block.get("text"), str):
+                text_blocks.append(block["text"])
+            elif isinstance(block, str):
+                text_blocks.append(block)
+        if text_blocks:
+            return "\n".join(text_blocks)
+
+    choices = response_payload.get("choices")
+    if isinstance(choices, list) and choices:
+        first_choice = choices[0]
+        if isinstance(first_choice, dict):
+            message = first_choice.get("message")
+            if isinstance(message, dict) and "content" in message:
+                return message["content"]
+            if "text" in first_choice:
+                return first_choice["text"]
+
+    return response_payload
+
+
+def build_vision_payload(prompt: str, image_files: list[dict[str, Any]], text: str, api_url: str = "") -> dict[str, Any]:
     images = [
         {
             "filename": image_file["filename"],
@@ -221,16 +283,38 @@ def build_vision_payload(prompt: str, image_files: list[dict[str, Any]], text: s
         }
         for image_file in image_files
     ]
+    model = os.getenv(LLM_MODEL_ENV, "")
+    if is_messages_api_url(api_url):
+        content: list[dict[str, Any]] = [{"type": "text", "text": build_user_prompt(prompt, text)}]
+        content.extend(
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": image["content_type"],
+                    "data": image["base64"],
+                },
+            }
+            for image in images
+        )
+        return {
+            "model": model,
+            "max_tokens": 4096,
+            "messages": [{"role": "user", "content": content}],
+        }
+
     return {
-        "model": os.getenv(LLM_MODEL_ENV, ""),
+        "model": model,
         "prompt": prompt,
         "images": images,
         "text": text,
     }
 
 
-def build_vision_headers() -> dict[str, str]:
+def build_vision_headers(api_url: str = "") -> dict[str, str]:
     headers = {"Content-Type": "application/json"}
+    if is_messages_api_url(api_url):
+        headers["anthropic-version"] = "2023-06-01"
     api_key = os.getenv(LLM_API_KEY_ENV)
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
@@ -245,20 +329,30 @@ async def call_vision_model_api(text: str, image_files: list[dict[str, Any]]) ->
             image_files,
         )
 
-    payload = build_vision_payload(STANDARD_IMAGE_EXTRACTION_PROMPT, image_files, text)
-    headers = build_vision_headers()
+    payload = build_vision_payload(STANDARD_IMAGE_EXTRACTION_PROMPT, image_files, text, api_url)
+    print_vision_payload(payload)
+    headers = build_vision_headers(api_url)
     try:
         async with httpx.AsyncClient(timeout=VISION_API_TIMEOUT_SECONDS) as client:
             response = await client.post(api_url, headers=headers, json=payload)
             response.raise_for_status()
             response_payload = response.json()
-        return normalize_extraction_result(parse_json_from_model_response(response_payload))
+        return normalize_extraction_result(parse_json_from_model_response(extract_model_output(response_payload)))
     except json.JSONDecodeError:
         body_preview = response.text[:200] if "response" in locals() else ""
         return empty_image_extraction_result(
             [
                 "Vision model API response was not valid JSON; "
                 f"status={getattr(response, 'status_code', 'unknown')}; body={body_preview}"
+            ],
+            image_files,
+        )
+    except httpx.HTTPStatusError as exc:
+        body_preview = exc.response.text[:200]
+        return empty_image_extraction_result(
+            [
+                "Vision model API request failed: "
+                f"status={exc.response.status_code}; body={body_preview}; error={exc}"
             ],
             image_files,
         )
