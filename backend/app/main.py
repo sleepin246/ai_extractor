@@ -216,6 +216,10 @@ def is_messages_api_url(api_url: str) -> bool:
     return api_url.rstrip("/").endswith("/v1/messages")
 
 
+def is_chat_completions_api_url(api_url: str) -> bool:
+    return api_url.rstrip("/").endswith("/v1/chat/completions")
+
+
 def build_user_prompt(prompt: str, text: str) -> str:
     if text:
         return f"{prompt}\n\n用户补充说明：\n{text}"
@@ -227,6 +231,8 @@ def redact_vision_payload(value: Any) -> Any:
         redacted = {}
         for key, item in value.items():
             if key in {"base64", "data"} and isinstance(item, str):
+                redacted[key] = f"{item[:80]}...<truncated {len(item)} chars>"
+            elif key == "url" and isinstance(item, str) and item.startswith("data:"):
                 redacted[key] = f"{item[:80]}...<truncated {len(item)} chars>"
             else:
                 redacted[key] = redact_vision_payload(item)
@@ -301,6 +307,23 @@ def build_vision_payload(prompt: str, image_files: list[dict[str, Any]], text: s
             "model": model,
             "max_tokens": 4096,
             "messages": [{"role": "user", "content": content}],
+        }
+
+    if is_chat_completions_api_url(api_url):
+        content = [{"type": "text", "text": build_user_prompt(prompt, text)}]
+        content.extend(
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:{image['content_type']};base64,{image['base64']}",
+                },
+            }
+            for image in images
+        )
+        return {
+            "model": model,
+            "messages": [{"role": "user", "content": content}],
+            "response_format": {"type": "json_object"},
         }
 
     return {

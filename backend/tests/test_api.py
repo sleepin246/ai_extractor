@@ -243,6 +243,75 @@ def test_messages_api_url_uses_messages_payload_and_parses_content(monkeypatch: 
     assert response.json()["data"]["result"]["document_info"]["title"] == "消息接口表"
 
 
+def test_chat_completions_url_uses_openai_compatible_messages_payload(monkeypatch: Any) -> None:
+    captured: dict[str, Any] = {}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "document_info": {"title": "Chat Completions 表", "id": "C-1", "confidence": 0.91},
+                                    "sections": [],
+                                    "raw_text": "Chat Completions 表",
+                                    "warnings": [],
+                                },
+                                ensure_ascii=False,
+                            )
+                        }
+                    }
+                ]
+            }
+
+    class FakeAsyncClient:
+        def __init__(self, timeout: float) -> None:
+            return None
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+            return None
+
+        async def post(self, url: str, headers: dict[str, str], json: dict[str, Any]) -> FakeResponse:
+            captured["url"] = url
+            captured["headers"] = headers
+            captured["json"] = json
+            return FakeResponse()
+
+    monkeypatch.setenv(main.LLM_BASE_URL_ENV, "https://api.quickrouter.ai/v1/chat/completions")
+    monkeypatch.setenv(main.LLM_API_KEY_ENV, "test-key")
+    monkeypatch.setenv(main.LLM_MODEL_ENV, "gpt-5.4-nano")
+    monkeypatch.setattr(main.httpx, "AsyncClient", FakeAsyncClient)
+
+    response = client.post(
+        "/api/parse",
+        data={"text": "用户备注"},
+        files={"files": ("form.png", b"image-bytes", "image/png")},
+    )
+
+    assert response.status_code == 200
+    assert captured["url"] == "https://api.quickrouter.ai/v1/chat/completions"
+    assert "anthropic-version" not in captured["headers"]
+    assert captured["headers"]["Authorization"] == "Bearer test-key"
+    assert captured["json"]["model"] == "gpt-5.4-nano"
+    assert captured["json"]["response_format"] == {"type": "json_object"}
+    content = captured["json"]["messages"][0]["content"]
+    assert content[0]["type"] == "text"
+    assert "用户备注" in content[0]["text"]
+    assert content[1] == {
+        "type": "image_url",
+        "image_url": {"url": "data:image/png;base64,aW1hZ2UtYnl0ZXM="},
+    }
+    assert response.json()["data"]["result"]["document_info"]["title"] == "Chat Completions 表"
+
+
 def test_vision_api_http_error_includes_response_body(monkeypatch: Any) -> None:
     class FakeResponse:
         status_code = 400

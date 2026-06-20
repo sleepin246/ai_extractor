@@ -81,7 +81,7 @@
 }
 ```
 
-如果 `LLM_BASE_URL` 以 `/v1/messages` 结尾，后端会自动使用 Messages API 请求体：`model`、`max_tokens`、`messages`，并将图片放入 `content[].source.data`。每次调用前会在服务日志中打印脱敏后的 payload，图片 base64 会被截断，便于排查 400 请求格式问题。
+如果 `LLM_BASE_URL` 以 `/v1/messages` 结尾，后端会自动使用 Messages API 请求体：`model`、`max_tokens`、`messages`，并将图片放入 `content[].source.data`。如果 `LLM_BASE_URL` 以 `/v1/chat/completions` 结尾，后端会自动使用 OpenAI-compatible Chat Completions 请求体：`model`、`messages`、`response_format`，并将图片放入 `content[].image_url.url` 的 data URL 中。每次调用前会在服务日志中打印脱敏后的 payload，图片 base64 / data URL 会被截断，便于排查 400 请求格式问题。
 
 如果未配置 `LLM_BASE_URL`，或模型接口返回非 JSON / 请求失败，接口仍返回标准 JSON 结构，但会将图片字段标记为 `uncertain`，并在 `warnings` 中提示具体原因；HTTP 4xx/5xx 错误会包含状态码和响应正文片段。
 
