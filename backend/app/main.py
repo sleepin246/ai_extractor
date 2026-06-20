@@ -25,11 +25,9 @@ TMP_ROOT = Path("/tmp/ai_extractor")
 UPLOAD_DIR = TMP_ROOT / "uploads"
 EXPORT_DIR = TMP_ROOT / "exports"
 MAX_AGE_SECONDS = 60 * 60 * 24
-VISION_API_URL_ENV = "AI_EXTRACTOR_VISION_API_URL"
-VISION_API_KEY_ENV = "AI_EXTRACTOR_VISION_API_KEY"
-VISION_API_HEADERS_ENV = "AI_EXTRACTOR_VISION_API_HEADERS_JSON"
-VISION_API_PAYLOAD_TEMPLATE_ENV = "AI_EXTRACTOR_VISION_API_PAYLOAD_TEMPLATE"
-VISION_API_RESPONSE_JSON_PATH_ENV = "AI_EXTRACTOR_VISION_API_RESPONSE_JSON_PATH"
+LLM_BASE_URL_ENV = "LLM_BASE_URL"
+LLM_API_KEY_ENV = "LLM_API_KEY"
+LLM_MODEL_ENV = "LLM_MODEL"
 VISION_API_TIMEOUT_SECONDS = 60.0
 FIELD_STATUSES = {"filled", "empty", "uncertain"}
 IMAGE_CONTENT_TYPE_PREFIX = "image/"
@@ -214,25 +212,6 @@ def parse_json_from_model_response(value: Any) -> Any:
     return json.loads(content)
 
 
-def extract_response_path(payload: Any, path: str) -> Any:
-    current = payload
-    for part in path.split("."):
-        if isinstance(current, dict):
-            current = current[part]
-        elif isinstance(current, list):
-            current = current[int(part)]
-        else:
-            raise KeyError(path)
-    return current
-
-
-def render_payload_template(template: str, values: dict[str, Any]) -> Any:
-    rendered = Template(template).safe_substitute(
-        {key: json.dumps(value, ensure_ascii=False) for key, value in values.items()}
-    )
-    return json.loads(rendered)
-
-
 def build_vision_payload(prompt: str, image_files: list[dict[str, Any]], text: str) -> dict[str, Any]:
     images = [
         {
@@ -242,31 +221,27 @@ def build_vision_payload(prompt: str, image_files: list[dict[str, Any]], text: s
         }
         for image_file in image_files
     ]
-    values = {"prompt": prompt, "images": images, "text": text}
-    template = os.getenv(VISION_API_PAYLOAD_TEMPLATE_ENV)
-    if template:
-        return render_payload_template(template, values)
-    return values
+    return {
+        "model": os.getenv(LLM_MODEL_ENV, ""),
+        "prompt": prompt,
+        "images": images,
+        "text": text,
+    }
 
 
 def build_vision_headers() -> dict[str, str]:
     headers = {"Content-Type": "application/json"}
-    headers_json = os.getenv(VISION_API_HEADERS_ENV)
-    if headers_json:
-        configured_headers = json.loads(headers_json)
-        if isinstance(configured_headers, dict):
-            headers.update({str(key): str(value) for key, value in configured_headers.items()})
-    api_key = os.getenv(VISION_API_KEY_ENV)
-    if api_key and "Authorization" not in headers:
+    api_key = os.getenv(LLM_API_KEY_ENV)
+    if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     return headers
 
 
 async def call_vision_model_api(text: str, image_files: list[dict[str, Any]]) -> dict[str, Any]:
-    api_url = os.getenv(VISION_API_URL_ENV)
+    api_url = os.getenv(LLM_BASE_URL_ENV)
     if not api_url:
         return empty_image_extraction_result(
-            [f"{VISION_API_URL_ENV} is not configured; image extraction requires a vision-capable JSON API."],
+            [f"{LLM_BASE_URL_ENV} is not configured; image extraction requires a vision-capable JSON API."],
             image_files,
         )
 
@@ -277,9 +252,7 @@ async def call_vision_model_api(text: str, image_files: list[dict[str, Any]]) ->
         response.raise_for_status()
         response_payload = response.json()
 
-    response_path = os.getenv(VISION_API_RESPONSE_JSON_PATH_ENV)
-    model_output = extract_response_path(response_payload, response_path) if response_path else response_payload
-    return normalize_extraction_result(parse_json_from_model_response(model_output))
+    return normalize_extraction_result(parse_json_from_model_response(response_payload))
 
 
 async def infer_structured_payload(text: str, files: list[dict[str, Any]]) -> dict[str, Any]:

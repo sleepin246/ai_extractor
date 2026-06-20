@@ -33,6 +33,9 @@
 | --- | --- | --- | --- |
 | `PORT` | Render 自动注入 | 是 | 不需要手动设置，Dockerfile 中的 `CMD` 会读取 `${PORT:-8000}` |
 | `VITE_API_BASE` | 不需要手动设置 | 否 | Dockerfile 构建前端时已内联使用 `/api` |
+| `LLM_BASE_URL` | 你的视觉模型或模型网关 HTTP JSON API 地址 | 是 | 上传图片时后端会调用该地址进行结构化抽取 |
+| `LLM_API_KEY` | 你的 API Key | 否 | 如设置，会以 `Authorization: Bearer ...` 发送 |
+| `LLM_MODEL` | 你的模型名称 | 是 | 会放入请求体的 `model` 字段 |
 
 ## 部署后验证
 

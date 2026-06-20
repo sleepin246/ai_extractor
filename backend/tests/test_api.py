@@ -39,7 +39,7 @@ def test_parse_text_and_file_returns_structured_payload() -> None:
 
 
 def test_parse_image_without_vision_api_returns_standard_json(monkeypatch: Any) -> None:
-    monkeypatch.delenv(main.VISION_API_URL_ENV, raising=False)
+    monkeypatch.delenv(main.LLM_BASE_URL_ENV, raising=False)
 
     response = client.post(
         "/api/parse",
@@ -57,7 +57,7 @@ def test_parse_image_without_vision_api_returns_standard_json(monkeypatch: Any) 
         "status": "uncertain",
         "source_hint": "uploaded image: form.png",
     }
-    assert main.VISION_API_URL_ENV in result["warnings"][0]
+    assert main.LLM_BASE_URL_ENV in result["warnings"][0]
 
 
 def test_parse_image_uses_provider_neutral_json_result(monkeypatch: Any) -> None:
@@ -106,6 +106,69 @@ def test_parse_image_uses_provider_neutral_json_result(monkeypatch: Any) -> None
     assert result["sections"][0]["fields"][0]["status"] == "filled"
     assert result["sections"][0]["fields"][1]["status"] == "empty"
     assert result["raw_text"] == "温度 23 °C"
+
+
+def test_vision_api_reads_llm_environment_variables(monkeypatch: Any) -> None:
+    captured: dict[str, Any] = {}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "document_info": {"title": "测试表", "id": "T-1", "confidence": 0.9},
+                "sections": [
+                    {
+                        "section_name": "结果",
+                        "fields": [
+                            {
+                                "field_name": "状态",
+                                "field_value": "通过",
+                                "status": "filled",
+                                "source_hint": "图片右上角",
+                            }
+                        ],
+                    }
+                ],
+                "raw_text": "状态 通过",
+                "warnings": [],
+            }
+
+    class FakeAsyncClient:
+        def __init__(self, timeout: float) -> None:
+            captured["timeout"] = timeout
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+            return None
+
+        async def post(self, url: str, headers: dict[str, str], json: dict[str, Any]) -> FakeResponse:
+            captured["url"] = url
+            captured["headers"] = headers
+            captured["json"] = json
+            return FakeResponse()
+
+    monkeypatch.setenv(main.LLM_BASE_URL_ENV, "https://llm.example.com/extract")
+    monkeypatch.setenv(main.LLM_API_KEY_ENV, "test-key")
+    monkeypatch.setenv(main.LLM_MODEL_ENV, "vision-model-test")
+    monkeypatch.setattr(main.httpx, "AsyncClient", FakeAsyncClient)
+
+    response = client.post(
+        "/api/parse",
+        data={"text": "读取图片"},
+        files={"files": ("form.png", b"image-bytes", "image/png")},
+    )
+
+    assert response.status_code == 200
+    assert captured["url"] == "https://llm.example.com/extract"
+    assert captured["headers"]["Authorization"] == "Bearer test-key"
+    assert captured["json"]["model"] == "vision-model-test"
+    assert captured["json"]["text"] == "读取图片"
+    assert captured["json"]["images"][0]["base64"] == "aW1hZ2UtYnl0ZXM="
+    assert response.json()["data"]["result"]["document_info"]["title"] == "测试表"
 
 
 def test_export_json_downloads_file() -> None:

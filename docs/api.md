@@ -60,16 +60,15 @@
 
 | 环境变量 | 必填 | 说明 |
 | --- | --- | --- |
-| `AI_EXTRACTOR_VISION_API_URL` | 是 | 视觉模型或模型网关的 HTTP JSON API 地址 |
-| `AI_EXTRACTOR_VISION_API_KEY` | 否 | 可选密钥；设置后默认以 `Authorization: Bearer ...` 发送 |
-| `AI_EXTRACTOR_VISION_API_HEADERS_JSON` | 否 | 自定义请求头 JSON，用于适配不同网关鉴权方式 |
-| `AI_EXTRACTOR_VISION_API_PAYLOAD_TEMPLATE` | 否 | 请求体 JSON 模板，可使用 `$prompt`、`$images`、`$text` 占位符 |
-| `AI_EXTRACTOR_VISION_API_RESPONSE_JSON_PATH` | 否 | 当响应被包装时，用点路径取出真正的 JSON 文本或对象 |
+| `LLM_BASE_URL` | 是 | 视觉模型或模型网关的 HTTP JSON API 地址 |
+| `LLM_API_KEY` | 否 | 可选密钥；设置后默认以 `Authorization: Bearer ...` 发送 |
+| `LLM_MODEL` | 是 | 要调用的模型名称；会放入默认请求体的 `model` 字段 |
 
 默认请求体为：
 
 ```json
 {
+  "model": "...LLM_MODEL...",
   "prompt": "...标准抽取提示词...",
   "images": [
     {
@@ -82,7 +81,7 @@
 }
 ```
 
-如果未配置 `AI_EXTRACTOR_VISION_API_URL`，接口仍返回标准 JSON 结构，但会将图片字段标记为 `uncertain`，并在 `warnings` 中提示缺少视觉模型 API 配置。
+如果未配置 `LLM_BASE_URL`，接口仍返回标准 JSON 结构，但会将图片字段标记为 `uncertain`，并在 `warnings` 中提示缺少视觉模型 API 配置。
 
 ## POST /api/export/{format}
 
