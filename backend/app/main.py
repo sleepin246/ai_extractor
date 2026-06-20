@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import json
+import os
 import shutil
 import time
 import uuid
@@ -8,16 +10,66 @@ from pathlib import Path
 from typing import Any
 from zipfile import ZIP_DEFLATED, ZipFile
 
+import httpx
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from openpyxl import Workbook
 
-APP_ROOT = Path(__file__).resolve().parents[1]
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = BACKEND_ROOT.parent
+STATIC_DIR = REPO_ROOT / "frontend" / "dist"
 TMP_ROOT = Path("/tmp/ai_extractor")
 UPLOAD_DIR = TMP_ROOT / "uploads"
 EXPORT_DIR = TMP_ROOT / "exports"
 MAX_AGE_SECONDS = 60 * 60 * 24
+LLM_BASE_URL_ENV = "LLM_BASE_URL"
+LLM_API_KEY_ENV = "LLM_API_KEY"
+LLM_MODEL_ENV = "LLM_MODEL"
+VISION_API_TIMEOUT_SECONDS = 60.0
+FIELD_STATUSES = {"filled", "empty", "uncertain"}
+IMAGE_CONTENT_TYPE_PREFIX = "image/"
+
+STANDARD_IMAGE_EXTRACTION_PROMPT = """
+你是一个通用图片信息抽取器。请从用户提供的图片中识别并抽取所有可见信息，包括但不限于：
+- 表格数据
+- 手写内容
+- 打印文字
+- 勾选框/状态
+- 数值与单位
+- 备注说明
+
+必须遵守：
+1. 只输出 JSON，禁止任何解释文本。
+2. 不要求与原始表格结构完全一致，但必须保证信息完整。
+3. 每个字段必须标注 status：filled、empty 或 uncertain。
+4. 不要使用供应商专属字段；仅根据输入图片生成 JSON。
+
+标准输出格式：
+{
+  "document_info": {
+    "title": "",
+    "id": "",
+    "confidence": 0
+  },
+  "sections": [
+    {
+      "section_name": "",
+      "fields": [
+        {
+          "field_name": "",
+          "field_value": "",
+          "status": "filled",
+          "source_hint": "来自图片的原始位置或描述"
+        }
+      ]
+    }
+  ],
+  "raw_text": "",
+  "warnings": []
+}
+""".strip()
 
 for directory in (UPLOAD_DIR, EXPORT_DIR):
     directory.mkdir(parents=True, exist_ok=True)
@@ -47,14 +99,173 @@ def cleanup_temp_files() -> None:
                     path.unlink(missing_ok=True)
 
 
-def infer_structured_payload(text: str, files: list[UploadFile]) -> dict[str, Any]:
+
+def empty_image_extraction_result(warnings: list[str], image_files: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "document_info": {"title": "", "id": "", "confidence": 0},
+        "sections": [
+            {
+                "section_name": "Uploaded images",
+                "fields": [
+                    {
+                        "field_name": image_file["filename"],
+                        "field_value": "",
+                        "status": "uncertain",
+                        "source_hint": f"uploaded image: {image_file['filename']}",
+                    }
+                    for image_file in image_files
+                ],
+            }
+        ] if image_files else [],
+        "raw_text": "",
+        "warnings": warnings,
+    }
+
+
+def normalize_extraction_result(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return empty_image_extraction_result(["Vision model response was not a JSON object."], [])
+
+    document_info = value.get("document_info") if isinstance(value.get("document_info"), dict) else {}
+    normalized: dict[str, Any] = {
+        "document_info": {
+            "title": str(document_info.get("title", "")),
+            "id": str(document_info.get("id", "")),
+            "confidence": normalize_confidence(document_info.get("confidence", 0)),
+        },
+        "sections": [],
+        "raw_text": str(value.get("raw_text", "")),
+        "warnings": normalize_warnings(value.get("warnings", [])),
+    }
+
+    sections = value.get("sections", [])
+    if isinstance(sections, list):
+        for section in sections:
+            if not isinstance(section, dict):
+                continue
+            fields = []
+            section_fields = section.get("fields", [])
+            if isinstance(section_fields, list):
+                for field in section_fields:
+                    if not isinstance(field, dict):
+                        continue
+                    fields.append(
+                        {
+                            "field_name": str(field.get("field_name", "")),
+                            "field_value": stringify_field_value(field.get("field_value", "")),
+                            "status": normalize_field_status(field.get("status", "uncertain")),
+                            "source_hint": str(field.get("source_hint", "")),
+                        }
+                    )
+            normalized["sections"].append(
+                {"section_name": str(section.get("section_name", "")), "fields": fields}
+            )
+
+    return normalized
+
+
+def normalize_confidence(value: Any) -> float:
+    if isinstance(value, (int, float)):
+        return max(0.0, min(1.0, float(value)))
+    return 0.0
+
+
+def normalize_warnings(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    if value:
+        return [str(value)]
+    return []
+
+
+def normalize_field_status(value: Any) -> str:
+    status = str(value).strip().lower()
+    if status in FIELD_STATUSES:
+        return status
+    return "uncertain"
+
+
+def stringify_field_value(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return ""
+    return json.dumps(value, ensure_ascii=False)
+
+
+def parse_json_from_model_response(value: Any) -> Any:
+    if isinstance(value, (dict, list)):
+        return value
+    if not isinstance(value, str):
+        return value
+
+    content = value.strip()
+    if content.startswith("```"):
+        lines = content.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        content = "\n".join(lines).strip()
+
+    return json.loads(content)
+
+
+def build_vision_payload(prompt: str, image_files: list[dict[str, Any]], text: str) -> dict[str, Any]:
+    images = [
+        {
+            "filename": image_file["filename"],
+            "content_type": image_file["content_type"],
+            "base64": base64.b64encode(image_file["content"]).decode("ascii"),
+        }
+        for image_file in image_files
+    ]
+    return {
+        "model": os.getenv(LLM_MODEL_ENV, ""),
+        "prompt": prompt,
+        "images": images,
+        "text": text,
+    }
+
+
+def build_vision_headers() -> dict[str, str]:
+    headers = {"Content-Type": "application/json"}
+    api_key = os.getenv(LLM_API_KEY_ENV)
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    return headers
+
+
+async def call_vision_model_api(text: str, image_files: list[dict[str, Any]]) -> dict[str, Any]:
+    api_url = os.getenv(LLM_BASE_URL_ENV)
+    if not api_url:
+        return empty_image_extraction_result(
+            [f"{LLM_BASE_URL_ENV} is not configured; image extraction requires a vision-capable JSON API."],
+            image_files,
+        )
+
+    payload = build_vision_payload(STANDARD_IMAGE_EXTRACTION_PROMPT, image_files, text)
+    headers = build_vision_headers()
+    async with httpx.AsyncClient(timeout=VISION_API_TIMEOUT_SECONDS) as client:
+        response = await client.post(api_url, headers=headers, json=payload)
+        response.raise_for_status()
+        response_payload = response.json()
+
+    return normalize_extraction_result(parse_json_from_model_response(response_payload))
+
+
+async def infer_structured_payload(text: str, files: list[dict[str, Any]]) -> dict[str, Any]:
+    image_files = [file for file in files if file["content_type"].startswith(IMAGE_CONTENT_TYPE_PREFIX)]
+    if image_files:
+        return await call_vision_model_api(text, image_files)
+
     return {
         "summary": text[:120] if text else "MVP mock result: replace with AI provider later.",
         "source": {
             "text_length": len(text),
             "file_count": len(files),
             "files": [
-                {"filename": file.filename, "content_type": file.content_type}
+                {"filename": file["filename"], "content_type": file["content_type"]}
                 for file in files
             ],
         },
@@ -82,13 +293,22 @@ async def parse_content(
     request_dir.mkdir(parents=True, exist_ok=True)
 
     saved_files = []
+    uploaded_files: list[dict[str, Any]] = []
     for file in files:
-        target = request_dir / (file.filename or f"upload-{uuid.uuid4().hex}")
-        with target.open("wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        filename = file.filename or f"upload-{uuid.uuid4().hex}"
+        content = await file.read()
+        target = request_dir / filename
+        target.write_bytes(content)
         saved_files.append(str(target))
+        uploaded_files.append(
+            {
+                "filename": filename,
+                "content_type": file.content_type or "application/octet-stream",
+                "content": content,
+            }
+        )
 
-    result = infer_structured_payload(text, files)
+    result = await infer_structured_payload(text, uploaded_files)
     return api_response({"id": request_id, "result": result, "saved_files": saved_files})
 
 
@@ -127,3 +347,7 @@ async def export_result(format_name: str, payload: dict[str, Any]) -> FileRespon
         target.write_text(json.dumps({"error": "unsupported format"}, ensure_ascii=False), encoding="utf-8")
 
     return FileResponse(target, filename=target.name)
+
+
+if STATIC_DIR.exists():
+    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="frontend")
