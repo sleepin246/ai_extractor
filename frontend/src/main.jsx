@@ -64,6 +64,48 @@ function App() {
     },
   ]);
   const [loading, setLoading] = useState(false);
+  const [adminItems, setAdminItems] = useState([]);
+  const [adminLoading, setAdminLoading] = useState(false);
+  const [databaseEnabled, setDatabaseEnabled] = useState(false);
+  const [selectedRecord, setSelectedRecord] = useState(null);
+
+  async function loadAdminResults() {
+    setAdminLoading(true);
+    const response = await fetch(`${API_BASE}/admin/results`);
+    const json = await response.json();
+    setAdminItems(json.data.items || []);
+    setDatabaseEnabled(Boolean(json.data.database_enabled));
+    setAdminLoading(false);
+  }
+
+  useEffect(() => {
+    loadAdminResults();
+  }, []);
+
+  function describeFiles(selectedFiles) {
+    if (selectedFiles.length === 0) return '';
+    return selectedFiles.map((file) => file.name).join('、');
+  }
+
+  function describeFiles(selectedFiles) {
+    if (selectedFiles.length === 0) return '';
+    return selectedFiles.map((file) => file.name).join('、');
+  }
+
+  function describeFiles(selectedFiles) {
+    if (selectedFiles.length === 0) return '';
+    return selectedFiles.map((file) => file.name).join('、');
+  }
+
+  function describeFiles(selectedFiles) {
+    if (selectedFiles.length === 0) return '';
+    return selectedFiles.map((file) => file.name).join('、');
+  }
+
+  function describeFiles(selectedFiles) {
+    if (selectedFiles.length === 0) return '';
+    return selectedFiles.map((file) => file.name).join('、');
+  }
 
   function describeFiles(selectedFiles) {
     if (selectedFiles.length === 0) return '';
