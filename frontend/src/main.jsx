@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client';
 import './styles.css';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '/api';
+window.__AI_EXTRACTOR_UI_VERSION__ = 'chat-ui-2026-06-24';
 
 function App() {
   const [text, setText] = useState('');
@@ -32,6 +33,11 @@ function App() {
   useEffect(() => {
     loadAdminResults();
   }, []);
+
+  function describeFiles(selectedFiles) {
+    if (selectedFiles.length === 0) return '';
+    return selectedFiles.map((file) => file.name).join('、');
+  }
 
   function describeFiles(selectedFiles) {
     if (selectedFiles.length === 0) return '';
