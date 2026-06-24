@@ -165,6 +165,7 @@ def test_vision_api_reads_llm_environment_variables(monkeypatch: Any) -> None:
     )
 
     assert response.status_code == 200
+    assert captured["timeout"] == main.DEFAULT_VISION_API_TIMEOUT_SECONDS
     assert captured["url"] == "https://llm.example.com/extract"
     assert captured["headers"]["Authorization"] == "Bearer test-key"
     assert captured["json"]["model"] == "vision-model-test"
@@ -390,6 +391,38 @@ def test_vision_api_non_json_response_returns_warning(monkeypatch: Any) -> None:
     assert result["sections"][0]["fields"][0]["status"] == "uncertain"
     assert "not valid JSON" in result["warnings"][0]
     assert "not json" in result["warnings"][0]
+
+
+def test_vision_api_timeout_returns_warning(monkeypatch: Any) -> None:
+    class FakeAsyncClient:
+        def __init__(self, timeout: float) -> None:
+            return None
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+            return None
+
+        async def post(self, url: str, headers: dict[str, str], json: dict[str, Any]) -> None:
+            raise httpx.ReadTimeout("upstream timed out")
+
+    monkeypatch.setenv(main.LLM_BASE_URL_ENV, "https://api.quickrouter.ai/v1/chat/completions")
+    monkeypatch.setenv(main.LLM_MODEL_ENV, "gpt-5.4-nano")
+    monkeypatch.setenv(main.LLM_TIMEOUT_SECONDS_ENV, "7")
+    monkeypatch.setattr(main.httpx, "AsyncClient", FakeAsyncClient)
+
+    response = client.post(
+        "/api/parse",
+        data={"text": "读取图片"},
+        files={"files": ("form.png", b"image-bytes", "image/png")},
+    )
+
+    assert response.status_code == 200
+    result = response.json()["data"]["result"]
+    assert result["sections"][0]["fields"][0]["status"] == "uncertain"
+    assert "timed out" in result["warnings"][0]
+    assert "timeout=7.0s" in result["warnings"][0]
 
 
 def test_parse_persists_result_when_database_is_configured(monkeypatch: Any) -> None:

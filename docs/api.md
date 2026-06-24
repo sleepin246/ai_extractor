@@ -63,6 +63,7 @@
 | `LLM_BASE_URL` | 是 | 视觉模型或模型网关的 HTTP JSON API 地址 |
 | `LLM_API_KEY` | 否 | 可选密钥；设置后默认以 `Authorization: Bearer ...` 发送 |
 | `LLM_MODEL` | 是 | 要调用的模型名称；会放入默认请求体的 `model` 字段 |
+| `LLM_TIMEOUT_SECONDS` | 否 | 上游模型 API 请求超时时间，默认 30 秒，允许范围 5-300 秒 |
 
 默认请求体为：
 
@@ -83,7 +84,7 @@
 
 如果 `LLM_BASE_URL` 以 `/v1/messages` 结尾，后端会自动使用 Messages API 请求体：`model`、`max_tokens`、`messages`，并将图片放入 `content[].source.data`。如果 `LLM_BASE_URL` 以 `/v1/chat/completions` 结尾，后端会自动使用 OpenAI-compatible Chat Completions 请求体：`model`、`messages`、`response_format`，并将图片放入 `content[].image_url.url` 的 data URL 中。每次调用前会在服务日志中打印脱敏后的 payload，图片 base64 / data URL 会被截断，便于排查 400 请求格式问题。
 
-如果未配置 `LLM_BASE_URL`，或模型接口返回非 JSON / 请求失败，接口仍返回标准 JSON 结构，但会将图片字段标记为 `uncertain`，并在 `warnings` 中提示具体原因；HTTP 4xx/5xx 错误会包含状态码和响应正文片段。
+如果未配置 `LLM_BASE_URL`，或模型接口返回非 JSON / 请求失败 / 请求超时，接口仍返回标准 JSON 结构，但会将图片字段标记为 `uncertain`，并在 `warnings` 中提示具体原因；HTTP 4xx/5xx 错误会包含状态码和响应正文片段。默认上游请求超时时间为 30 秒，可通过 `LLM_TIMEOUT_SECONDS` 调整。
 
 ## GET /api/admin/results
 

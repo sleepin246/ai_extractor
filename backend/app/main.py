@@ -31,8 +31,9 @@ MAX_AGE_SECONDS = 60 * 60 * 24
 LLM_BASE_URL_ENV = "LLM_BASE_URL"
 LLM_API_KEY_ENV = "LLM_API_KEY"
 LLM_MODEL_ENV = "LLM_MODEL"
+LLM_TIMEOUT_SECONDS_ENV = "LLM_TIMEOUT_SECONDS"
 DATABASE_URL_ENV = "DATABASE_URL"
-VISION_API_TIMEOUT_SECONDS = 60.0
+DEFAULT_VISION_API_TIMEOUT_SECONDS = 30.0
 FIELD_STATUSES = {"filled", "empty", "uncertain"}
 IMAGE_CONTENT_TYPE_PREFIX = "image/"
 
@@ -447,6 +448,15 @@ def build_vision_payload(prompt: str, image_files: list[dict[str, Any]], text: s
     }
 
 
+def get_vision_api_timeout_seconds() -> float:
+    raw_timeout = os.getenv(LLM_TIMEOUT_SECONDS_ENV, str(DEFAULT_VISION_API_TIMEOUT_SECONDS)).strip()
+    try:
+        timeout = float(raw_timeout)
+    except ValueError:
+        return DEFAULT_VISION_API_TIMEOUT_SECONDS
+    return max(5.0, min(timeout, 300.0))
+
+
 def build_vision_headers(api_url: str = "") -> dict[str, str]:
     headers = {"Content-Type": "application/json"}
     if is_messages_api_url(api_url):
@@ -469,7 +479,7 @@ async def call_vision_model_api(text: str, image_files: list[dict[str, Any]]) ->
     print_vision_payload(payload)
     headers = build_vision_headers(api_url)
     try:
-        async with httpx.AsyncClient(timeout=VISION_API_TIMEOUT_SECONDS) as client:
+        async with httpx.AsyncClient(timeout=get_vision_api_timeout_seconds()) as client:
             response = await client.post(api_url, headers=headers, json=payload)
             response.raise_for_status()
             response_payload = response.json()
@@ -480,6 +490,14 @@ async def call_vision_model_api(text: str, image_files: list[dict[str, Any]]) ->
             [
                 "Vision model API response was not valid JSON; "
                 f"status={getattr(response, 'status_code', 'unknown')}; body={body_preview}"
+            ],
+            image_files,
+        )
+    except httpx.TimeoutException as exc:
+        return empty_image_extraction_result(
+            [
+                "Vision model API request timed out: "
+                f"timeout={get_vision_api_timeout_seconds()}s; error={exc}"
             ],
             image_files,
         )
