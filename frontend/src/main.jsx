@@ -38,6 +38,11 @@ function App() {
     return selectedFiles.map((file) => file.name).join('、');
   }
 
+  function describeFiles(selectedFiles) {
+    if (selectedFiles.length === 0) return '';
+    return selectedFiles.map((file) => file.name).join('、');
+  }
+
   async function submit() {
     if (!text.trim() && files.length === 0) return;
 
@@ -119,21 +124,6 @@ function App() {
         <button onClick={submit} disabled={loading || (!text.trim() && files.length === 0)} aria-label="发送">
           <Send size={20} />
         </button>
-      </div>
-    </section>
-    <section className="admin-panel">
-      <div className="admin-header">
-        <div><h2><Database size={20} />后台管理</h2><p>查看 PostgreSQL 中保存的识别结果</p></div>
-        <button onClick={loadAdminResults} disabled={adminLoading}><RefreshCw size={16} />刷新</button>
-      </div>
-      {!databaseEnabled && <p className="error">未配置 DATABASE_URL，识别结果不会持久化保存。</p>}
-      <div className="record-list">
-        {adminItems.length === 0 && <p className="hint">暂无保存记录。</p>}
-        {adminItems.map((item) => <button className="record-card" key={item.id} onClick={() => openRecord(item)}>
-          <strong>{item.result_json?.document_info?.title || item.input_text || '未命名记录'}</strong>
-          <span>{item.created_at}</span>
-          <small>{item.id}</small>
-        </button>)}
       </div>
     </section>
   </main>;

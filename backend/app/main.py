@@ -17,7 +17,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from openpyxl import Workbook
 
@@ -36,6 +36,8 @@ DATABASE_URL_ENV = "DATABASE_URL"
 DEFAULT_VISION_API_TIMEOUT_SECONDS = 30.0
 FIELD_STATUSES = {"filled", "empty", "uncertain"}
 IMAGE_CONTENT_TYPE_PREFIX = "image/"
+
+FAVICON_SVG = """<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 64 64\"><rect width=\"64\" height=\"64\" rx=\"14\" fill=\"#111827\"/><path d=\"M18 42V22h8v20h-8Zm10 0 8-20h8l8 20h-8l-1.2-4h-7.6L34 42h-6Zm9.1-10h3.8L39 26l-1.9 6Z\" fill=\"#fff\"/></svg>"""
 
 STANDARD_IMAGE_EXTRACTION_PROMPT = """
 你是一个通用图片信息抽取器。请从用户提供的图片中识别并抽取所有可见信息，包括但不限于：
@@ -623,6 +625,11 @@ async def export_result(format_name: str, payload: dict[str, Any]) -> FileRespon
         target.write_text(json.dumps({"error": "unsupported format"}, ensure_ascii=False), encoding="utf-8")
 
     return FileResponse(target, filename=target.name)
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon() -> Response:
+    return Response(content=FAVICON_SVG, media_type="image/svg+xml")
 
 
 if STATIC_DIR.exists():

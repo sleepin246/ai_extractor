@@ -492,6 +492,14 @@ def test_admin_result_detail_returns_record(monkeypatch: Any) -> None:
     assert response.json()["data"] == record
 
 
+def test_favicon_ico_returns_icon_response() -> None:
+    response = client.get("/favicon.ico")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("image/svg+xml")
+    assert b"<svg" in response.content
+
+
 def test_export_json_downloads_file() -> None:
     payload = {"data": {"summary": "demo", "fields": [{"key": "title", "value": "demo"}]}}
     response = client.post("/api/export/json", json=payload)
