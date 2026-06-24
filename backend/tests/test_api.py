@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 
 from fastapi.testclient import TestClient
+from starlette.datastructures import Headers
 
 from app import main
 from app.main import app
@@ -492,11 +493,21 @@ def test_admin_result_detail_returns_record(monkeypatch: Any) -> None:
     assert response.json()["data"] == record
 
 
+def test_static_files_do_not_return_not_modified() -> None:
+    static_files = main.NoCacheStaticFiles(directory=".")
+
+    assert static_files.is_not_modified(
+        Headers({"etag": "example"}),
+        Headers({"if-none-match": "example"}),
+    ) is False
+
+
 def test_favicon_ico_returns_icon_response() -> None:
     response = client.get("/favicon.ico")
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("image/svg+xml")
+    assert response.headers["cache-control"] == "no-store"
     assert b"<svg" in response.content
 
 

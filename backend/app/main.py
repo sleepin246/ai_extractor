@@ -92,6 +92,22 @@ app.add_middleware(
 )
 
 
+class NoCacheStaticFiles(StaticFiles):
+    def is_not_modified(self, response_headers: Any, request_headers: Any) -> bool:
+        return False
+
+    def file_response(
+        self,
+        full_path: Any,
+        stat_result: Any,
+        scope: Any,
+        status_code: int = 200,
+    ) -> Response:
+        response = super().file_response(full_path, stat_result, scope, status_code)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+
 @app.on_event("startup")
 def startup() -> None:
     init_database()
@@ -629,8 +645,12 @@ async def export_result(format_name: str, payload: dict[str, Any]) -> FileRespon
 
 @app.get("/favicon.ico", include_in_schema=False)
 def favicon() -> Response:
-    return Response(content=FAVICON_SVG, media_type="image/svg+xml")
+    return Response(
+        content=FAVICON_SVG,
+        media_type="image/svg+xml",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 if STATIC_DIR.exists():
-    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="frontend")
+    app.mount("/", NoCacheStaticFiles(directory=STATIC_DIR, html=True), name="frontend")
