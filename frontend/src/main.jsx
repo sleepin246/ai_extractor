@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { FileUp, Send } from 'lucide-react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
@@ -6,7 +6,55 @@ import './styles.css';
 const API_BASE = import.meta.env.VITE_API_BASE || '/api';
 window.__AI_EXTRACTOR_UI_VERSION__ = 'chat-ui-2026-06-24';
 
+function hideStaticFallbackWhenChatIsVisible() {
+  window.requestAnimationFrame(() => {
+    const chatWindow = document.querySelector('.chat-window');
+    const fallback = document.getElementById('static-fallback');
+    const rect = chatWindow?.getBoundingClientRect();
+    if (fallback && rect && rect.width > 100 && rect.height > 100) {
+      fallback.setAttribute('hidden', 'true');
+    }
+  });
+}
+
+function AppErrorFallback() {
+  return <main className="chat-shell">
+    <section className="chat-window error-window">
+      <h1>AI Extractor</h1>
+      <p>聊天界面加载失败，请刷新页面；也可以使用基础提交表单。</p>
+      <form action="/api/parse" method="post" encType="multipart/form-data" className="fallback-form">
+        <textarea name="text" placeholder="输入说明，或选择图片/文件后提交..." />
+        <input name="files" type="file" multiple />
+        <button type="submit">提交识别</button>
+      </form>
+    </section>
+  </main>;
+}
+
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error) {
+    console.error('AI Extractor UI failed to render', error);
+  }
+
+  render() {
+    if (this.state.hasError) return <AppErrorFallback />;
+    return this.props.children;
+  }
+}
+
 function App() {
+  useEffect(() => {
+    hideStaticFallbackWhenChatIsVisible();
+  }, []);
   const [text, setText] = useState('');
   const [files, setFiles] = useState([]);
   const [messages, setMessages] = useState([
@@ -33,6 +81,11 @@ function App() {
   useEffect(() => {
     loadAdminResults();
   }, []);
+
+  function describeFiles(selectedFiles) {
+    if (selectedFiles.length === 0) return '';
+    return selectedFiles.map((file) => file.name).join('、');
+  }
 
   function describeFiles(selectedFiles) {
     if (selectedFiles.length === 0) return '';
@@ -145,4 +198,4 @@ function App() {
   </main>;
 }
 
-createRoot(document.getElementById('root')).render(<App />);
+createRoot(document.getElementById('root')).render(<ErrorBoundary><App /></ErrorBoundary>);

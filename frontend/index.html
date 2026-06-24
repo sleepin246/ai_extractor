@@ -10,20 +10,19 @@
     </style>
   </head>
   <body>
-    <div id="root">
-      <main class="fallback-shell">
-        <section class="fallback-card">
-          <h1>AI Extractor</h1>
-          <p>页面正在加载。如果长时间停留在这里，仍可用下面的基础表单提交到后端。</p>
-          <form action="/api/parse" method="post" enctype="multipart/form-data">
-            <textarea name="text" placeholder="输入说明，或选择图片/文件后提交..."></textarea>
-            <input name="files" type="file" multiple />
-            <button type="submit">提交识别</button>
-          </form>
-          <div class="fallback-note">React 界面加载成功后会自动切换为聊天界面。</div>
-        </section>
-      </main>
-    </div>
+    <div id="root"></div>
+    <main id="static-fallback" class="fallback-shell">
+      <section class="fallback-card">
+        <h1>AI Extractor</h1>
+        <p>页面正在加载。如果长时间停留在这里，仍可用下面的基础表单提交到后端。</p>
+        <form action="/api/parse" method="post" enctype="multipart/form-data">
+          <textarea name="text" placeholder="输入说明，或选择图片/文件后提交..."></textarea>
+          <input name="files" type="file" multiple />
+          <button type="submit">提交识别</button>
+        </form>
+        <div class="fallback-note">聊天界面加载成功后会自动替换此基础界面。</div>
+      </section>
+    </main>
     <noscript>当前浏览器禁用了 JavaScript，已显示基础提交表单。</noscript>
     <script type="module" src="/src/main.jsx"></script>
   </body>
