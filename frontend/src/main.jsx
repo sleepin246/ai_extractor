@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Database, FileUp, MessageCircle, RefreshCw, Send } from 'lucide-react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
@@ -64,6 +64,7 @@ function App() {
   const [databaseEnabled, setDatabaseEnabled] = useState(false);
   const [selectedRecord, setSelectedRecord] = useState(null);
   const [adminError, setAdminError] = useState('');
+  const submittingRef = useRef(false);
 
   function describeFiles(selectedFiles) {
     if (selectedFiles.length === 0) return '';
@@ -93,7 +94,8 @@ function App() {
   }, [view]);
 
   async function submit() {
-    if (!text.trim() && files.length === 0) return;
+    if (submittingRef.current || (!text.trim() && files.length === 0)) return;
+    submittingRef.current = true;
 
     const userMessage = text.trim() || `上传了 ${files.length} 个文件：${describeFiles(files)}`;
     setMessages((items) => [...items, { role: 'user', content: userMessage }]);
@@ -130,6 +132,7 @@ function App() {
         { role: 'assistant', content: error.message || '识别请求失败，请检查服务配置。' },
       ]);
     } finally {
+      submittingRef.current = false;
       setLoading(false);
     }
   }

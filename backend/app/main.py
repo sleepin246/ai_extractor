@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import os
@@ -33,7 +34,9 @@ LLM_API_KEY_ENV = "LLM_API_KEY"
 LLM_MODEL_ENV = "LLM_MODEL"
 LLM_TIMEOUT_SECONDS_ENV = "LLM_TIMEOUT_SECONDS"
 DATABASE_URL_ENV = "DATABASE_URL"
-DEFAULT_VISION_API_TIMEOUT_SECONDS = 30.0
+DEFAULT_VISION_API_TIMEOUT_SECONDS = 120.0
+DEFAULT_VISION_API_RETRIES = 2
+LLM_RETRIES_ENV = "LLM_RETRIES"
 FIELD_STATUSES = {"filled", "empty", "uncertain"}
 IMAGE_CONTENT_TYPE_PREFIX = "image/"
 
@@ -472,7 +475,16 @@ def get_vision_api_timeout_seconds() -> float:
         timeout = float(raw_timeout)
     except ValueError:
         return DEFAULT_VISION_API_TIMEOUT_SECONDS
-    return max(5.0, min(timeout, 300.0))
+    return max(5.0, min(timeout, 600.0))
+
+
+def get_vision_api_retries() -> int:
+    raw_retries = os.getenv(LLM_RETRIES_ENV, str(DEFAULT_VISION_API_RETRIES)).strip()
+    try:
+        retries = int(raw_retries)
+    except ValueError:
+        return DEFAULT_VISION_API_RETRIES
+    return max(0, min(retries, 5))
 
 
 def build_vision_headers(api_url: str = "") -> dict[str, str]:
@@ -496,12 +508,28 @@ async def call_vision_model_api(text: str, image_files: list[dict[str, Any]]) ->
     payload = build_vision_payload(STANDARD_IMAGE_EXTRACTION_PROMPT, image_files, text, api_url)
     print_vision_payload(payload)
     headers = build_vision_headers(api_url)
+    timeout_seconds = get_vision_api_timeout_seconds()
+    retries = get_vision_api_retries()
     try:
-        async with httpx.AsyncClient(timeout=get_vision_api_timeout_seconds()) as client:
-            response = await client.post(api_url, headers=headers, json=payload)
-            response.raise_for_status()
-            response_payload = response.json()
-        return normalize_extraction_result(parse_json_from_model_response(extract_model_output(response_payload)))
+        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+            for attempt in range(retries + 1):
+                try:
+                    response = await client.post(api_url, headers=headers, json=payload)
+                    response.raise_for_status()
+                    response_payload = response.json()
+                    return normalize_extraction_result(
+                        parse_json_from_model_response(extract_model_output(response_payload))
+                    )
+                except httpx.TimeoutException:
+                    if attempt >= retries:
+                        raise
+                    wait_seconds = min(2 ** attempt, 5)
+                    print(
+                        "Vision model API timed out; "
+                        f"retrying attempt={attempt + 1}/{retries} after {wait_seconds}s",
+                        flush=True,
+                    )
+                    await asyncio.sleep(wait_seconds)
     except json.JSONDecodeError:
         body_preview = response.text[:200] if "response" in locals() else ""
         return empty_image_extraction_result(
@@ -515,7 +543,7 @@ async def call_vision_model_api(text: str, image_files: list[dict[str, Any]]) ->
         return empty_image_extraction_result(
             [
                 "Vision model API request timed out: "
-                f"timeout={get_vision_api_timeout_seconds()}s; error={exc}"
+                f"timeout={timeout_seconds}s; retries={retries}; error={exc}"
             ],
             image_files,
         )
