@@ -411,7 +411,12 @@ def test_vision_api_timeout_returns_warning(monkeypatch: Any) -> None:
     monkeypatch.setenv(main.LLM_BASE_URL_ENV, "https://api.quickrouter.ai/v1/chat/completions")
     monkeypatch.setenv(main.LLM_MODEL_ENV, "gpt-5.4-nano")
     monkeypatch.setenv(main.LLM_TIMEOUT_SECONDS_ENV, "7")
+
+    async def fake_sleep(seconds: float) -> None:
+        return None
+
     monkeypatch.setattr(main.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(main.asyncio, "sleep", fake_sleep)
 
     response = client.post(
         "/api/parse",
@@ -424,6 +429,7 @@ def test_vision_api_timeout_returns_warning(monkeypatch: Any) -> None:
     assert result["sections"][0]["fields"][0]["status"] == "uncertain"
     assert "timed out" in result["warnings"][0]
     assert "timeout=7.0s" in result["warnings"][0]
+    assert "retries=2" in result["warnings"][0]
 
 
 def test_parse_persists_result_when_database_is_configured(monkeypatch: Any) -> None:
