@@ -6,18 +6,31 @@ AI Extractor 是一个最小可运行的全栈 MVP：用户在聊天式页面上
 
 - Frontend：React + Vite，响应式支持 PC Web、手机 H5、微信内置浏览器
 - Backend：FastAPI，统一 JSON 响应格式
-- Deploy：Docker Compose，本地和公网部署复用同一套镜像
-- Storage：暂不使用数据库，上传文件和导出文件临时保存在容器 `/tmp/ai_extractor`，访问 API 时自动清理超过 24 小时的临时文件
+- Deploy：Render Web Service 单服务部署；本地和公网也可使用 Docker Compose 镜像部署
+- Storage：使用 PostgreSQL 保存识别结果；上传文件和导出文件仍临时保存在容器 `/tmp/ai_extractor`，访问 API 时自动清理超过 24 小时的临时文件
 
 ## 目录结构
 
 ```text
-frontend/   # 前端聊天式上传和 JSON 编辑导出页面
-backend/    # FastAPI API 服务
-deploy/     # 公网部署 Compose 覆盖配置
-docs/       # API 和设计文档
+frontend/          # 前端聊天式上传和 JSON 编辑导出页面
+backend/           # FastAPI API 服务，也负责托管 frontend/dist
+deploy/            # 公网部署 Compose 覆盖配置
+README_RENDER.md   # Render Web Service 部署说明
+docs/              # API 和设计文档
 docker-compose.yml
 ```
+
+## Render 部署
+
+Render 部署以 [`README_RENDER.md`](./README_RENDER.md) 为唯一说明来源，避免在多个文档里维护不同配置。当前推荐配置是 Docker Web Service：
+
+- Runtime：Docker
+- Root Directory：留空
+- Dockerfile Path：`Dockerfile`
+- Build Command：留空，Render 会自动执行 Dockerfile 构建
+- Start Command：留空，使用 Dockerfile 中的 `CMD`
+
+该镜像会构建 React 前端并由 FastAPI 在同一个 Web Service 中托管 `/api/*`、前端页面和后台管理界面。识别结果会在配置 `DATABASE_URL` 后保存到 PostgreSQL。
 
 ## 本地启动
 
@@ -31,6 +44,7 @@ docker compose up --build
 
 - 前端：http://localhost:3000
 - 后端健康检查：http://localhost:8000/api/health
+- PostgreSQL：Docker Compose 会自动启动 `postgres` 服务，并为后端注入 `DATABASE_URL`
 
 ### 方式二：本地开发
 
@@ -41,6 +55,7 @@ cd backend
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+export DATABASE_URL=postgresql://ai_extractor:ai_extractor@localhost:5432/ai_extractor  # 本地开发如需持久化，请先启动 PostgreSQL
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
@@ -48,9 +63,25 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 ```bash
 cd frontend
-npm install
-VITE_API_BASE=http://localhost:8000/api npm run dev
+npm ci
+VITE_API_BASE=http://127.0.0.1:8000/api npm run dev
 ```
+
+## 本地模拟 Render 单服务
+
+```bash
+pip install -r backend/requirements.txt
+cd frontend
+npm ci
+VITE_API_BASE=/api npm run build
+cd ../backend
+PORT=8000 sh -c 'uvicorn app.main:app --host 0.0.0.0 --port $PORT'
+```
+
+启动后访问：
+
+- 前端：http://127.0.0.1:8000
+- 后端健康检查：http://127.0.0.1:8000/api/health
 
 ## 测试策略
 
@@ -89,6 +120,10 @@ curl http://localhost:8000/api/health
 docker compose down -v
 ```
 
+### Render / CI 验证
+
+GitHub Actions 会运行 backend pytest、frontend production build 与 Docker Compose 集成检查。Render 完整联调在部署后通过 `/api/health` 和前端页面验证。
+
 ## 公网部署
 
 在服务器上执行：
@@ -101,11 +136,11 @@ docker compose -f docker-compose.yml -f deploy/docker-compose.public.yml up -d -
 
 ## 验证方式
 
-1. 打开 `http://localhost:3000`，在聊天输入框输入一段文本。
+1. 打开前端页面，在聊天输入框输入一段文本。
 2. 可选：选择图片、音频或文档文件。
 3. 点击「发送」，右侧/下方会出现结构化 JSON。
 4. 编辑 JSON 后，点击 JSON、EXCEL、MARKDOWN 或 ZIP 按钮下载。
-5. 打开 `http://localhost:8000/api/health`，应返回：
+5. 打开 `/api/health`，应返回：
 
 ```json
 {"code":0,"message":"ok","data":{"status":"healthy","service":"ai-extractor-backend"}}
