@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { Database, Download, FileUp, RefreshCw, Send } from 'lucide-react';
 import { createRoot } from 'react-dom/client';
-import { Download, FileUp, Send } from 'lucide-react';
 import './styles.css';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '/api';
@@ -15,6 +15,23 @@ function App() {
   const [jsonText, setJsonText] = useState('{}');
   const [jsonError, setJsonError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [adminItems, setAdminItems] = useState([]);
+  const [adminLoading, setAdminLoading] = useState(false);
+  const [databaseEnabled, setDatabaseEnabled] = useState(false);
+  const [selectedRecord, setSelectedRecord] = useState(null);
+
+  async function loadAdminResults() {
+    setAdminLoading(true);
+    const response = await fetch(`${API_BASE}/admin/results`);
+    const json = await response.json();
+    setAdminItems(json.data.items || []);
+    setDatabaseEnabled(Boolean(json.data.database_enabled));
+    setAdminLoading(false);
+  }
+
+  useEffect(() => {
+    loadAdminResults();
+  }, []);
 
   async function submit() {
     if (!text && files.length === 0) return;
@@ -28,10 +45,11 @@ function App() {
     setResult(json.data.result);
     setJsonText(JSON.stringify(json.data.result, null, 2));
     setJsonError('');
-    setMessages((items) => [...items, { role: 'assistant', content: '已完成解析，可在右侧/下方编辑 JSON 并导出。' }]);
+    setMessages((items) => [...items, { role: 'assistant', content: json.data.record_id ? '已完成解析并保存到数据库。' : '已完成解析；未配置数据库时不会持久化保存。' }]);
     setText('');
     setFiles([]);
     setLoading(false);
+    loadAdminResults();
   }
 
   async function download(format) {
@@ -47,6 +65,13 @@ function App() {
     link.download = `ai-extractor-result.${format === 'excel' ? 'xlsx' : format === 'markdown' ? 'md' : format}`;
     link.click();
     URL.revokeObjectURL(url);
+  }
+
+  function openRecord(record) {
+    setSelectedRecord(record);
+    setResult(record.result_json);
+    setJsonText(JSON.stringify(record.result_json, null, 2));
+    setJsonError('');
   }
 
   return <main className="app-shell">
@@ -74,7 +99,23 @@ function App() {
         }
       }} />
       {jsonError && <p className="error">{jsonError}</p>}
+      {selectedRecord && <p className="hint">当前查看记录：{selectedRecord.id} · {selectedRecord.created_at}</p>}
       <div className="exports">{['json', 'excel', 'markdown', 'zip'].map((format) => <button key={format} disabled={!result} onClick={() => download(format)}><Download size={16} />{format.toUpperCase()}</button>)}</div>
+    </section>
+    <section className="admin-panel">
+      <div className="admin-header">
+        <div><h2><Database size={20} />后台管理</h2><p>查看 PostgreSQL 中保存的识别结果</p></div>
+        <button onClick={loadAdminResults} disabled={adminLoading}><RefreshCw size={16} />刷新</button>
+      </div>
+      {!databaseEnabled && <p className="error">未配置 DATABASE_URL，识别结果不会持久化保存。</p>}
+      <div className="record-list">
+        {adminItems.length === 0 && <p className="hint">暂无保存记录。</p>}
+        {adminItems.map((item) => <button className="record-card" key={item.id} onClick={() => openRecord(item)}>
+          <strong>{item.result_json?.document_info?.title || item.input_text || '未命名记录'}</strong>
+          <span>{item.created_at}</span>
+          <small>{item.id}</small>
+        </button>)}
+      </div>
     </section>
   </main>;
 }

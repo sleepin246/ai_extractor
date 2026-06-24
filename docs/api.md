@@ -85,6 +85,14 @@
 
 如果未配置 `LLM_BASE_URL`，或模型接口返回非 JSON / 请求失败，接口仍返回标准 JSON 结构，但会将图片字段标记为 `uncertain`，并在 `warnings` 中提示具体原因；HTTP 4xx/5xx 错误会包含状态码和响应正文片段。
 
+## GET /api/admin/results
+
+返回 PostgreSQL 中保存的识别结果列表，用于后台管理界面。响应中的 `database_enabled` 表示当前是否配置了 `DATABASE_URL`。
+
+## GET /api/admin/results/{record_id}
+
+返回单条已保存的识别结果详情。
+
 ## POST /api/export/{format}
 
 导出 JSON / Excel / Markdown / ZIP。

@@ -12,6 +12,9 @@ from typing import Any
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import httpx
+import psycopg
+from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -28,6 +31,7 @@ MAX_AGE_SECONDS = 60 * 60 * 24
 LLM_BASE_URL_ENV = "LLM_BASE_URL"
 LLM_API_KEY_ENV = "LLM_API_KEY"
 LLM_MODEL_ENV = "LLM_MODEL"
+DATABASE_URL_ENV = "DATABASE_URL"
 VISION_API_TIMEOUT_SECONDS = 60.0
 FIELD_STATUSES = {"filled", "empty", "uncertain"}
 IMAGE_CONTENT_TYPE_PREFIX = "image/"
@@ -83,6 +87,115 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+def startup() -> None:
+    init_database()
+
+
+
+def get_database_url() -> str:
+    return os.getenv(DATABASE_URL_ENV, "").strip()
+
+
+def init_database() -> bool:
+    database_url = get_database_url()
+    if not database_url:
+        return False
+    try:
+        with psycopg.connect(database_url) as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS extraction_results (
+                    id UUID PRIMARY KEY,
+                    request_id TEXT NOT NULL,
+                    input_text TEXT NOT NULL DEFAULT '',
+                    result_json JSONB NOT NULL,
+                    saved_files JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_extraction_results_created_at "
+                "ON extraction_results (created_at DESC)"
+            )
+            conn.commit()
+        return True
+    except psycopg.Error as exc:
+        print(f"PostgreSQL initialization failed: {exc}", flush=True)
+        return False
+
+
+def save_extraction_result(
+    request_id: str,
+    input_text: str,
+    result: dict[str, Any],
+    saved_files: list[str],
+) -> str | None:
+    database_url = get_database_url()
+    if not database_url:
+        return None
+    record_id = str(uuid.uuid4())
+    try:
+        with psycopg.connect(database_url) as conn:
+            conn.execute(
+                """
+                INSERT INTO extraction_results (id, request_id, input_text, result_json, saved_files)
+                VALUES (%s, %s, %s, %s, %s)
+                """,
+                (record_id, request_id, input_text, Jsonb(result), Jsonb(saved_files)),
+            )
+            conn.commit()
+        return record_id
+    except psycopg.Error as exc:
+        print(f"PostgreSQL save failed: {exc}", flush=True)
+        return None
+
+
+def list_extraction_results(limit: int = 100) -> list[dict[str, Any]]:
+    database_url = get_database_url()
+    if not database_url:
+        return []
+    safe_limit = max(1, min(limit, 500))
+    try:
+        with psycopg.connect(database_url, row_factory=dict_row) as conn:
+            rows = conn.execute(
+                """
+                SELECT id::text, request_id, input_text, result_json, saved_files,
+                       created_at::text AS created_at
+                FROM extraction_results
+                ORDER BY created_at DESC
+                LIMIT %s
+                """,
+                (safe_limit,),
+            ).fetchall()
+        return list(rows)
+    except psycopg.Error as exc:
+        print(f"PostgreSQL list failed: {exc}", flush=True)
+        return []
+
+
+def get_extraction_result(record_id: str) -> dict[str, Any] | None:
+    database_url = get_database_url()
+    if not database_url:
+        return None
+    try:
+        with psycopg.connect(database_url, row_factory=dict_row) as conn:
+            row = conn.execute(
+                """
+                SELECT id::text, request_id, input_text, result_json, saved_files,
+                       created_at::text AS created_at
+                FROM extraction_results
+                WHERE id = %s
+                """,
+                (record_id,),
+            ).fetchone()
+        return dict(row) if row else None
+    except psycopg.Error as exc:
+        print(f"PostgreSQL get failed: {exc}", flush=True)
+        return None
 
 
 def api_response(data: Any = None, message: str = "ok", code: int = 0) -> dict[str, Any]:
@@ -440,7 +553,21 @@ async def parse_content(
         )
 
     result = await infer_structured_payload(text, uploaded_files)
-    return api_response({"id": request_id, "result": result, "saved_files": saved_files})
+    record_id = save_extraction_result(request_id, text, result, saved_files)
+    return api_response({"id": request_id, "record_id": record_id, "result": result, "saved_files": saved_files})
+
+
+@app.get("/api/admin/results")
+def admin_results(limit: int = 100) -> dict[str, Any]:
+    return api_response({"database_enabled": bool(get_database_url()), "items": list_extraction_results(limit)})
+
+
+@app.get("/api/admin/results/{record_id}")
+def admin_result_detail(record_id: str) -> dict[str, Any]:
+    record = get_extraction_result(record_id)
+    if not record:
+        return api_response(None, message="not found", code=404)
+    return api_response(record)
 
 
 @app.post("/api/export/{format_name}")

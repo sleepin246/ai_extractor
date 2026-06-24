@@ -392,6 +392,73 @@ def test_vision_api_non_json_response_returns_warning(monkeypatch: Any) -> None:
     assert "not json" in result["warnings"][0]
 
 
+def test_parse_persists_result_when_database_is_configured(monkeypatch: Any) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_save_extraction_result(request_id: str, input_text: str, result: dict[str, Any], saved_files: list[str]) -> str:
+        captured["request_id"] = request_id
+        captured["input_text"] = input_text
+        captured["result"] = result
+        captured["saved_files"] = saved_files
+        return "record-123"
+
+    monkeypatch.setattr(main, "save_extraction_result", fake_save_extraction_result)
+
+    response = client.post(
+        "/api/parse",
+        data={"text": "需要保存的识别结果"},
+        files={"files": ("contract.txt", b"hello", "text/plain")},
+    )
+
+    assert response.status_code == 200
+    body = response.json()["data"]
+    assert body["record_id"] == "record-123"
+    assert captured["input_text"] == "需要保存的识别结果"
+    assert captured["result"] == body["result"]
+    assert captured["saved_files"] == body["saved_files"]
+
+
+def test_admin_results_returns_saved_records(monkeypatch: Any) -> None:
+    records = [
+        {
+            "id": "record-123",
+            "request_id": "request-123",
+            "input_text": "发票",
+            "result_json": {"document_info": {"title": "发票"}, "sections": [], "raw_text": "", "warnings": []},
+            "saved_files": [],
+            "created_at": "2026-06-24 00:00:00+00",
+        }
+    ]
+
+    monkeypatch.setattr(main, "get_database_url", lambda: "postgresql://example")
+    monkeypatch.setattr(main, "list_extraction_results", lambda limit=100: records)
+
+    response = client.get("/api/admin/results")
+
+    assert response.status_code == 200
+    body = response.json()["data"]
+    assert body["database_enabled"] is True
+    assert body["items"] == records
+
+
+def test_admin_result_detail_returns_record(monkeypatch: Any) -> None:
+    record = {
+        "id": "record-123",
+        "request_id": "request-123",
+        "input_text": "表格",
+        "result_json": {"document_info": {"title": "表格"}, "sections": [], "raw_text": "", "warnings": []},
+        "saved_files": [],
+        "created_at": "2026-06-24 00:00:00+00",
+    }
+
+    monkeypatch.setattr(main, "get_extraction_result", lambda record_id: record if record_id == "record-123" else None)
+
+    response = client.get("/api/admin/results/record-123")
+
+    assert response.status_code == 200
+    assert response.json()["data"] == record
+
+
 def test_export_json_downloads_file() -> None:
     payload = {"data": {"summary": "demo", "fields": [{"key": "title", "value": "demo"}]}}
     response = client.post("/api/export/json", json=payload)

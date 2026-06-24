@@ -36,6 +36,7 @@
 | `LLM_BASE_URL` | 你的视觉模型或模型网关 HTTP JSON API 地址 | 是 | 上传图片时后端会调用该地址进行结构化抽取 |
 | `LLM_API_KEY` | 你的 API Key | 否 | 如设置，会以 `Authorization: Bearer ...` 发送 |
 | `LLM_MODEL` | 你的模型名称 | 是 | 会放入请求体的 `model` 字段 |
+| `DATABASE_URL` | PostgreSQL 连接串 | 是 | Render PostgreSQL 会提供该连接串，后端用它建表并保存识别结果 |
 
 ## 部署后验证
 
@@ -51,4 +52,4 @@ curl https://your-service.onrender.com/api/health
 {"code":0,"message":"ok","data":{"status":"healthy","service":"ai-extractor-backend"}}
 ```
 
-浏览器打开 `https://your-service.onrender.com`，应看到 AI Extractor 前端页面。输入文本或上传文件后，前端会请求同源 `/api/parse`。
+浏览器打开 `https://your-service.onrender.com`，应看到 AI Extractor 前端页面和后台管理区域。输入文本或上传文件后，前端会请求同源 `/api/parse`，配置 `DATABASE_URL` 后可在后台管理区域看到保存的识别结果。
