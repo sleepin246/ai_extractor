@@ -48,6 +48,11 @@ function App() {
     return selectedFiles.map((file) => file.name).join('、');
   }
 
+  function describeFiles(selectedFiles) {
+    if (selectedFiles.length === 0) return '';
+    return selectedFiles.map((file) => file.name).join('、');
+  }
+
   async function submit() {
     if (!text.trim() && files.length === 0) return;
 
