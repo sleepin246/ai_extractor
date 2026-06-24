@@ -2,6 +2,10 @@
 
 本项目已调整为 Render Web Service 的最小单服务部署方式：Render 构建 React 前端静态文件，然后由 FastAPI 后端在同一个 Web Service 中托管 `/api/*` 和前端页面。
 
+## 一键 Blueprint（推荐创建数据库）
+
+仓库根目录已提供 `render.yaml`，其中会创建一个 Docker Web Service 和一个 PostgreSQL 数据库，并通过 `fromDatabase` 自动把数据库连接串注入为 `DATABASE_URL`。如果你当前 Render 服务提示未配置数据库，推荐在 Render 里用 Blueprint 重新同步此仓库，或手动创建 PostgreSQL 后把 Internal Database URL 填到 Web Service 的 `DATABASE_URL`。
+
 ## Render 服务类型
 
 请在 Render 创建 **Web Service**，并使用以下配置：
