@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
+import mimetypes
 import os
 import shutil
 import time
@@ -33,7 +35,9 @@ LLM_API_KEY_ENV = "LLM_API_KEY"
 LLM_MODEL_ENV = "LLM_MODEL"
 LLM_TIMEOUT_SECONDS_ENV = "LLM_TIMEOUT_SECONDS"
 DATABASE_URL_ENV = "DATABASE_URL"
-DEFAULT_VISION_API_TIMEOUT_SECONDS = 30.0
+DEFAULT_VISION_API_TIMEOUT_SECONDS = 120.0
+DEFAULT_VISION_API_RETRIES = 2
+LLM_RETRIES_ENV = "LLM_RETRIES"
 FIELD_STATUSES = {"filled", "empty", "uncertain"}
 IMAGE_CONTENT_TYPE_PREFIX = "image/"
 
@@ -173,6 +177,78 @@ def save_extraction_result(
         return None
 
 
+
+
+def create_extraction_result(
+    input_text: str,
+    result: dict[str, Any],
+    saved_files: list[str] | None = None,
+    request_id: str | None = None,
+) -> str | None:
+    database_url = get_database_url()
+    if not database_url:
+        return None
+    record_id = str(uuid.uuid4())
+    safe_request_id = request_id or str(uuid.uuid4())
+    try:
+        with psycopg.connect(database_url) as conn:
+            conn.execute(
+                """
+                INSERT INTO extraction_results (id, request_id, input_text, result_json, saved_files)
+                VALUES (%s, %s, %s, %s, %s)
+                """,
+                (record_id, safe_request_id, input_text, Jsonb(result), Jsonb(saved_files or [])),
+            )
+            conn.commit()
+        return record_id
+    except psycopg.Error as exc:
+        print(f"PostgreSQL create failed: {exc}", flush=True)
+        return None
+
+
+def update_extraction_result(
+    record_id: str,
+    input_text: str,
+    result: dict[str, Any],
+    saved_files: list[str] | None = None,
+) -> bool:
+    database_url = get_database_url()
+    if not database_url:
+        return False
+    try:
+        with psycopg.connect(database_url) as conn:
+            cursor = conn.execute(
+                """
+                UPDATE extraction_results
+                SET input_text = %s, result_json = %s, saved_files = %s
+                WHERE id = %s
+                """,
+                (input_text, Jsonb(result), Jsonb(saved_files or []), record_id),
+            )
+            conn.commit()
+        return cursor.rowcount > 0
+    except psycopg.Error as exc:
+        print(f"PostgreSQL update failed: {exc}", flush=True)
+        return False
+
+
+def delete_extraction_result(record_id: str) -> bool:
+    database_url = get_database_url()
+    if not database_url:
+        return False
+    try:
+        with psycopg.connect(database_url) as conn:
+            cursor = conn.execute(
+                "DELETE FROM extraction_results WHERE id = %s",
+                (record_id,),
+            )
+            conn.commit()
+        return cursor.rowcount > 0
+    except psycopg.Error as exc:
+        print(f"PostgreSQL delete failed: {exc}", flush=True)
+        return False
+
+
 def list_extraction_results(limit: int = 100) -> list[dict[str, Any]]:
     database_url = get_database_url()
     if not database_url:
@@ -217,8 +293,34 @@ def get_extraction_result(record_id: str) -> dict[str, Any] | None:
         return None
 
 
+
+def resolve_saved_file(record: dict[str, Any], file_index: int) -> Path | None:
+    saved_files = record.get("saved_files")
+    if not isinstance(saved_files, list) or file_index < 0 or file_index >= len(saved_files):
+        return None
+
+    file_path = Path(str(saved_files[file_index])).resolve()
+    upload_root = UPLOAD_DIR.resolve()
+    if not file_path.is_relative_to(upload_root) or not file_path.is_file():
+        return None
+    return file_path
+
+
 def api_response(data: Any = None, message: str = "ok", code: int = 0) -> dict[str, Any]:
     return {"code": code, "message": message, "data": data}
+
+
+
+
+def parse_admin_result_payload(payload: dict[str, Any]) -> tuple[str, dict[str, Any], list[str], str | None]:
+    input_text = str(payload.get("input_text", ""))
+    result_json = payload.get("result_json", payload.get("result", {}))
+    if not isinstance(result_json, dict):
+        result_json = {"value": result_json}
+    saved_files_value = payload.get("saved_files", [])
+    saved_files = [str(item) for item in saved_files_value] if isinstance(saved_files_value, list) else []
+    request_id = payload.get("request_id")
+    return input_text, result_json, saved_files, str(request_id) if request_id else None
 
 
 def cleanup_temp_files() -> None:
@@ -324,6 +426,57 @@ def stringify_field_value(value: Any) -> str:
     if value is None:
         return ""
     return json.dumps(value, ensure_ascii=False)
+
+
+def append_result_rows_to_sheet(sheet: Any, data: Any) -> bool:
+    if not isinstance(data, dict):
+        return False
+
+    rows: list[list[str]] = []
+    sections = data.get("sections")
+    if isinstance(sections, list):
+        for section in sections:
+            if not isinstance(section, dict):
+                continue
+            section_name = str(section.get("section_name", ""))
+            fields = section.get("fields")
+            if not isinstance(fields, list):
+                continue
+            for field in fields:
+                if not isinstance(field, dict):
+                    continue
+                rows.append(
+                    [
+                        section_name,
+                        str(field.get("field_name", "")),
+                        stringify_field_value(field.get("field_value", "")),
+                        str(field.get("status", "")),
+                        str(field.get("source_hint", "")),
+                    ]
+                )
+
+    fields = data.get("fields")
+    if isinstance(fields, list):
+        for field in fields:
+            if not isinstance(field, dict):
+                continue
+            rows.append(
+                [
+                    "字段",
+                    str(field.get("key", field.get("field_name", ""))),
+                    stringify_field_value(field.get("value", field.get("field_value", ""))),
+                    str(field.get("status", "")),
+                    str(field.get("source_hint", "")),
+                ]
+            )
+
+    if not rows:
+        return False
+
+    sheet.append(["section", "field", "value", "status", "source"])
+    for row in rows:
+        sheet.append(row)
+    return True
 
 
 def parse_json_from_model_response(value: Any) -> Any:
@@ -472,7 +625,16 @@ def get_vision_api_timeout_seconds() -> float:
         timeout = float(raw_timeout)
     except ValueError:
         return DEFAULT_VISION_API_TIMEOUT_SECONDS
-    return max(5.0, min(timeout, 300.0))
+    return max(5.0, min(timeout, 600.0))
+
+
+def get_vision_api_retries() -> int:
+    raw_retries = os.getenv(LLM_RETRIES_ENV, str(DEFAULT_VISION_API_RETRIES)).strip()
+    try:
+        retries = int(raw_retries)
+    except ValueError:
+        return DEFAULT_VISION_API_RETRIES
+    return max(0, min(retries, 5))
 
 
 def build_vision_headers(api_url: str = "") -> dict[str, str]:
@@ -496,12 +658,28 @@ async def call_vision_model_api(text: str, image_files: list[dict[str, Any]]) ->
     payload = build_vision_payload(STANDARD_IMAGE_EXTRACTION_PROMPT, image_files, text, api_url)
     print_vision_payload(payload)
     headers = build_vision_headers(api_url)
+    timeout_seconds = get_vision_api_timeout_seconds()
+    retries = get_vision_api_retries()
     try:
-        async with httpx.AsyncClient(timeout=get_vision_api_timeout_seconds()) as client:
-            response = await client.post(api_url, headers=headers, json=payload)
-            response.raise_for_status()
-            response_payload = response.json()
-        return normalize_extraction_result(parse_json_from_model_response(extract_model_output(response_payload)))
+        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+            for attempt in range(retries + 1):
+                try:
+                    response = await client.post(api_url, headers=headers, json=payload)
+                    response.raise_for_status()
+                    response_payload = response.json()
+                    return normalize_extraction_result(
+                        parse_json_from_model_response(extract_model_output(response_payload))
+                    )
+                except httpx.TimeoutException:
+                    if attempt >= retries:
+                        raise
+                    wait_seconds = min(2 ** attempt, 5)
+                    print(
+                        "Vision model API timed out; "
+                        f"retrying attempt={attempt + 1}/{retries} after {wait_seconds}s",
+                        flush=True,
+                    )
+                    await asyncio.sleep(wait_seconds)
     except json.JSONDecodeError:
         body_preview = response.text[:200] if "response" in locals() else ""
         return empty_image_extraction_result(
@@ -515,7 +693,7 @@ async def call_vision_model_api(text: str, image_files: list[dict[str, Any]]) ->
         return empty_image_extraction_result(
             [
                 "Vision model API request timed out: "
-                f"timeout={get_vision_api_timeout_seconds()}s; error={exc}"
+                f"timeout={timeout_seconds}s; retries={retries}; error={exc}"
             ],
             image_files,
         )
@@ -606,6 +784,48 @@ def admin_result_detail(record_id: str) -> dict[str, Any]:
     return api_response(record)
 
 
+@app.post("/api/admin/results")
+def admin_result_create(payload: dict[str, Any]) -> dict[str, Any]:
+    input_text, result_json, saved_files, request_id = parse_admin_result_payload(payload)
+    record_id = create_extraction_result(input_text, result_json, saved_files, request_id)
+    if not record_id:
+        return api_response(None, message="database unavailable or create failed", code=500)
+    return api_response(get_extraction_result(record_id))
+
+
+@app.put("/api/admin/results/{record_id}")
+def admin_result_update(record_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    input_text, result_json, saved_files, _ = parse_admin_result_payload(payload)
+    if not update_extraction_result(record_id, input_text, result_json, saved_files):
+        return api_response(None, message="not found or update failed", code=404)
+    return api_response(get_extraction_result(record_id))
+
+
+@app.delete("/api/admin/results/{record_id}")
+def admin_result_delete(record_id: str) -> dict[str, Any]:
+    if not delete_extraction_result(record_id):
+        return api_response(None, message="not found or delete failed", code=404)
+    return api_response({"id": record_id})
+
+
+@app.get("/api/admin/results/{record_id}/files/{file_index}", response_model=None)
+def admin_result_file(record_id: str, file_index: int) -> Any:
+    record = get_extraction_result(record_id)
+    if not record:
+        return api_response(None, message="not found", code=404)
+
+    file_path = resolve_saved_file(record, file_index)
+    if not file_path:
+        return api_response(None, message="file not found", code=404)
+
+    media_type, _ = mimetypes.guess_type(file_path.name)
+    return FileResponse(
+        file_path,
+        filename=file_path.name,
+        media_type=media_type or "application/octet-stream",
+    )
+
+
 @app.post("/api/export/{format_name}")
 async def export_result(format_name: str, payload: dict[str, Any]) -> FileResponse:
     cleanup_temp_files()
@@ -625,10 +845,11 @@ async def export_result(format_name: str, payload: dict[str, Any]) -> FileRespon
         workbook = Workbook()
         sheet = workbook.active
         sheet.title = "Result"
-        sheet.append(["key", "value"])
-        if isinstance(data, dict):
-            for key, value in data.items():
-                sheet.append([key, json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else value])
+        if not append_result_rows_to_sheet(sheet, data):
+            sheet.append(["key", "value"])
+            if isinstance(data, dict):
+                for key, value in data.items():
+                    sheet.append([key, json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else value])
         workbook.save(target)
     elif format_name == "zip":
         target = base / "result.zip"

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+from io import BytesIO
 from typing import Any
 
 import httpx
+from openpyxl import load_workbook
 
 from fastapi.testclient import TestClient
 from starlette.datastructures import Headers
@@ -411,7 +413,12 @@ def test_vision_api_timeout_returns_warning(monkeypatch: Any) -> None:
     monkeypatch.setenv(main.LLM_BASE_URL_ENV, "https://api.quickrouter.ai/v1/chat/completions")
     monkeypatch.setenv(main.LLM_MODEL_ENV, "gpt-5.4-nano")
     monkeypatch.setenv(main.LLM_TIMEOUT_SECONDS_ENV, "7")
+
+    async def fake_sleep(seconds: float) -> None:
+        return None
+
     monkeypatch.setattr(main.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(main.asyncio, "sleep", fake_sleep)
 
     response = client.post(
         "/api/parse",
@@ -424,6 +431,7 @@ def test_vision_api_timeout_returns_warning(monkeypatch: Any) -> None:
     assert result["sections"][0]["fields"][0]["status"] == "uncertain"
     assert "timed out" in result["warnings"][0]
     assert "timeout=7.0s" in result["warnings"][0]
+    assert "retries=2" in result["warnings"][0]
 
 
 def test_parse_persists_result_when_database_is_configured(monkeypatch: Any) -> None:
@@ -509,6 +517,120 @@ def test_favicon_ico_returns_icon_response() -> None:
     assert response.headers["content-type"].startswith("image/svg+xml")
     assert response.headers["cache-control"] == "no-store"
     assert b"<svg" in response.content
+
+
+def test_admin_result_create_update_delete_endpoints(monkeypatch: Any) -> None:
+    records: dict[str, dict[str, Any]] = {}
+
+    def fake_create(input_text: str, result: dict[str, Any], saved_files: list[str] | None = None, request_id: str | None = None) -> str:
+        records["record-123"] = {
+            "id": "record-123",
+            "request_id": request_id or "request-123",
+            "input_text": input_text,
+            "result_json": result,
+            "saved_files": saved_files or [],
+            "created_at": "2026-06-25 00:00:00+00",
+        }
+        return "record-123"
+
+    def fake_update(record_id: str, input_text: str, result: dict[str, Any], saved_files: list[str] | None = None) -> bool:
+        if record_id not in records:
+            return False
+        records[record_id].update(
+            {
+                "input_text": input_text,
+                "result_json": result,
+                "saved_files": saved_files or [],
+            }
+        )
+        return True
+
+    def fake_delete(record_id: str) -> bool:
+        return records.pop(record_id, None) is not None
+
+    monkeypatch.setattr(main, "create_extraction_result", fake_create)
+    monkeypatch.setattr(main, "update_extraction_result", fake_update)
+    monkeypatch.setattr(main, "delete_extraction_result", fake_delete)
+    monkeypatch.setattr(main, "get_extraction_result", lambda record_id: records.get(record_id))
+
+    create_response = client.post(
+        "/api/admin/results",
+        json={"input_text": "新增", "result_json": {"fields": [{"key": "title", "value": "新增"}]}},
+    )
+
+    assert create_response.status_code == 200
+    assert create_response.json()["data"]["id"] == "record-123"
+    assert create_response.json()["data"]["input_text"] == "新增"
+
+    update_response = client.put(
+        "/api/admin/results/record-123",
+        json={"input_text": "更新", "result_json": {"fields": [{"key": "title", "value": "更新"}]}},
+    )
+
+    assert update_response.status_code == 200
+    assert update_response.json()["data"]["input_text"] == "更新"
+    assert records["record-123"]["result_json"]["fields"][0]["value"] == "更新"
+
+    delete_response = client.delete("/api/admin/results/record-123")
+
+    assert delete_response.status_code == 200
+    assert delete_response.json()["data"] == {"id": "record-123"}
+    assert records == {}
+
+
+def test_admin_result_file_downloads_saved_upload(monkeypatch: Any) -> None:
+    request_dir = main.UPLOAD_DIR / "test-request"
+    request_dir.mkdir(parents=True, exist_ok=True)
+    image_path = request_dir / "form.png"
+    image_path.write_bytes(b"image-bytes")
+
+    record = {
+        "id": "record-123",
+        "request_id": "request-123",
+        "input_text": "表格",
+        "result_json": {"document_info": {"title": "表格"}, "sections": [], "raw_text": "", "warnings": []},
+        "saved_files": [str(image_path)],
+        "created_at": "2026-06-24 00:00:00+00",
+    }
+
+    monkeypatch.setattr(main, "get_extraction_result", lambda record_id: record if record_id == "record-123" else None)
+
+    response = client.get("/api/admin/results/record-123/files/0")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("image/png")
+    assert response.content == b"image-bytes"
+
+
+def test_export_excel_uses_field_table_columns() -> None:
+    payload = {
+        "data": {
+            "document_info": {"title": "巡检表"},
+            "sections": [
+                {
+                    "section_name": "基础信息",
+                    "fields": [
+                        {
+                            "field_name": "温度",
+                            "field_value": "23 °C",
+                            "status": "filled",
+                            "source_hint": "第一行",
+                        }
+                    ],
+                }
+            ],
+            "raw_text": "不需要展示",
+            "warnings": [],
+        }
+    }
+
+    response = client.post("/api/export/excel", json=payload)
+
+    assert response.status_code == 200
+    workbook = load_workbook(BytesIO(response.content))
+    rows = list(workbook.active.iter_rows(values_only=True))
+    assert rows[0] == ("section", "field", "value", "status", "source")
+    assert rows[1] == ("基础信息", "温度", "23 °C", "filled", "第一行")
 
 
 def test_export_json_downloads_file() -> None:
