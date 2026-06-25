@@ -10,8 +10,10 @@
     </style>
   </head>
   <body>
+    <script>document.documentElement.dataset.aiExtractorBooting = "true";</script>
     <div id="root"></div>
     <noscript>当前浏览器禁用了 JavaScript，请启用 JavaScript 后使用 AI Extractor。</noscript>
     <script type="module" src="/src/main.jsx"></script>
+    <script>setTimeout(function(){delete document.documentElement.dataset.aiExtractorBooting}, 8000);</script>
   </body>
 </html>
