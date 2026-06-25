@@ -179,33 +179,6 @@ def save_extraction_result(
 
 
 
-def create_extraction_result(
-    input_text: str,
-    result: dict[str, Any],
-    saved_files: list[str] | None = None,
-    request_id: str | None = None,
-) -> str | None:
-    database_url = get_database_url()
-    if not database_url:
-        return None
-    record_id = str(uuid.uuid4())
-    safe_request_id = request_id or str(uuid.uuid4())
-    try:
-        with psycopg.connect(database_url) as conn:
-            conn.execute(
-                """
-                INSERT INTO extraction_results (id, request_id, input_text, result_json, saved_files)
-                VALUES (%s, %s, %s, %s, %s)
-                """,
-                (record_id, safe_request_id, input_text, Jsonb(result), Jsonb(saved_files or [])),
-            )
-            conn.commit()
-        return record_id
-    except psycopg.Error as exc:
-        print(f"PostgreSQL create failed: {exc}", flush=True)
-        return None
-
-
 def update_extraction_result(
     record_id: str,
     input_text: str,
@@ -269,6 +242,38 @@ def list_extraction_results(limit: int = 100) -> list[dict[str, Any]]:
         return list(rows)
     except psycopg.Error as exc:
         print(f"PostgreSQL list failed: {exc}", flush=True)
+        return []
+
+
+
+
+def search_extraction_results(query: str, limit: int = 100) -> list[dict[str, Any]]:
+    database_url = get_database_url()
+    if not database_url:
+        return []
+    search_query = query.strip()
+    if not search_query:
+        return list_extraction_results(limit)
+    safe_limit = max(1, min(limit, 500))
+    pattern = f"%{search_query}%"
+    try:
+        with psycopg.connect(database_url, row_factory=dict_row) as conn:
+            rows = conn.execute(
+                """
+                SELECT id::text, request_id, input_text, result_json, saved_files,
+                       created_at::text AS created_at
+                FROM extraction_results
+                WHERE input_text ILIKE %s
+                   OR result_json::text ILIKE %s
+                   OR saved_files::text ILIKE %s
+                ORDER BY created_at DESC
+                LIMIT %s
+                """,
+                (pattern, pattern, pattern, safe_limit),
+            ).fetchall()
+        return list(rows)
+    except psycopg.Error as exc:
+        print(f"PostgreSQL search failed: {exc}", flush=True)
         return []
 
 
@@ -772,8 +777,9 @@ async def parse_content(
 
 
 @app.get("/api/admin/results")
-def admin_results(limit: int = 100) -> dict[str, Any]:
-    return api_response({"database_enabled": bool(get_database_url()), "items": list_extraction_results(limit)})
+def admin_results(limit: int = 100, query: str = "") -> dict[str, Any]:
+    items = search_extraction_results(query, limit) if query.strip() else list_extraction_results(limit)
+    return api_response({"database_enabled": bool(get_database_url()), "items": items, "query": query})
 
 
 @app.get("/api/admin/results/{record_id}")
@@ -782,15 +788,6 @@ def admin_result_detail(record_id: str) -> dict[str, Any]:
     if not record:
         return api_response(None, message="not found", code=404)
     return api_response(record)
-
-
-@app.post("/api/admin/results")
-def admin_result_create(payload: dict[str, Any]) -> dict[str, Any]:
-    input_text, result_json, saved_files, request_id = parse_admin_result_payload(payload)
-    record_id = create_extraction_result(input_text, result_json, saved_files, request_id)
-    if not record_id:
-        return api_response(None, message="database unavailable or create failed", code=500)
-    return api_response(get_extraction_result(record_id))
 
 
 @app.put("/api/admin/results/{record_id}")

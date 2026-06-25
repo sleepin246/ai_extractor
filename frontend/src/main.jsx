@@ -201,6 +201,7 @@ function App() {
   const [databaseEnabled, setDatabaseEnabled] = useState(false);
   const [selectedRecord, setSelectedRecord] = useState(null);
   const [adminError, setAdminError] = useState('');
+  const [adminQuery, setAdminQuery] = useState('');
   const [editorMode, setEditorMode] = useState(null);
   const [editorRecordId, setEditorRecordId] = useState('');
   const [editorInputText, setEditorInputText] = useState('');
@@ -218,7 +219,9 @@ function App() {
     setAdminLoading(true);
     setAdminError('');
     try {
-      const response = await fetch(`${API_BASE}/admin/results`);
+      const params = new URLSearchParams();
+      if (adminQuery.trim()) params.set('query', adminQuery.trim());
+      const response = await fetch(`${API_BASE}/admin/results${params.toString() ? `?${params}` : ''}`);
       const json = await response.json();
       if (!response.ok || json.code !== 0) {
         throw new Error(json.message || '后台数据加载失败。');
@@ -233,14 +236,6 @@ function App() {
   }
 
 
-  function openCreateEditor() {
-    setEditorMode('create');
-    setEditorRecordId('');
-    setEditorInputText('');
-    setEditorResultJson(JSON.stringify({ document_info: { title: '' }, sections: [], raw_text: '', warnings: [] }, null, 2));
-    setEditorSavedFiles('');
-    setEditorError('');
-  }
 
   function openEditEditor(record) {
     setEditorMode('edit');
@@ -271,9 +266,8 @@ function App() {
       result_json: resultJson,
       saved_files: editorSavedFiles.split('\n').map((item) => item.trim()).filter(Boolean),
     };
-    const isEdit = editorMode === 'edit';
-    const response = await fetch(isEdit ? `${API_BASE}/admin/results/${editorRecordId}` : `${API_BASE}/admin/results`, {
-      method: isEdit ? 'PUT' : 'POST',
+    const response = await fetch(`${API_BASE}/admin/results/${editorRecordId}`, {
+      method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
@@ -410,14 +404,14 @@ function App() {
             <p>{databaseEnabled ? `共 ${adminItems.length} 条记录` : '请在 Render 为 Web Service 设置 DATABASE_URL。'}</p>
           </div>
           <div className="admin-toolbar-actions">
-            <button onClick={openCreateEditor}>新增记录</button>
-            <button onClick={loadAdminResults} disabled={adminLoading}><RefreshCw size={16} />{adminLoading ? '加载中' : '刷新'}</button>
+            <input className="admin-search" value={adminQuery} onChange={(event) => setAdminQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') loadAdminResults(); }} placeholder="搜索字段/说明/文件" />
+            <button onClick={loadAdminResults} disabled={adminLoading}><RefreshCw size={16} />{adminLoading ? '查询中' : '查询/刷新'}</button>
           </div>
         </div>
         {adminError && <p className="admin-error">{adminError}</p>}
         {editorMode && <section className="admin-editor">
           <div className="admin-editor-header">
-            <strong>{editorMode === 'edit' ? '编辑记录' : '新增记录'}</strong>
+            <strong>编辑记录</strong>
             <button type="button" onClick={closeEditor}>关闭</button>
           </div>
           <label>输入说明

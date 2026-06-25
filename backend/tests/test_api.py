@@ -519,19 +519,48 @@ def test_favicon_ico_returns_icon_response() -> None:
     assert b"<svg" in response.content
 
 
-def test_admin_result_create_update_delete_endpoints(monkeypatch: Any) -> None:
-    records: dict[str, dict[str, Any]] = {}
-
-    def fake_create(input_text: str, result: dict[str, Any], saved_files: list[str] | None = None, request_id: str | None = None) -> str:
-        records["record-123"] = {
+def test_admin_results_can_search_database_fields(monkeypatch: Any) -> None:
+    records = [
+        {
             "id": "record-123",
-            "request_id": request_id or "request-123",
-            "input_text": input_text,
-            "result_json": result,
-            "saved_files": saved_files or [],
+            "request_id": "request-123",
+            "input_text": "巡检",
+            "result_json": {"fields": [{"key": "temperature", "value": "23 °C"}]},
+            "saved_files": [],
             "created_at": "2026-06-25 00:00:00+00",
         }
-        return "record-123"
+    ]
+    captured: dict[str, Any] = {}
+
+    def fake_search(query: str, limit: int = 100) -> list[dict[str, Any]]:
+        captured["query"] = query
+        captured["limit"] = limit
+        return records
+
+    monkeypatch.setattr(main, "get_database_url", lambda: "postgresql://example")
+    monkeypatch.setattr(main, "search_extraction_results", fake_search)
+
+    response = client.get("/api/admin/results?query=temperature&limit=25")
+
+    assert response.status_code == 200
+    body = response.json()["data"]
+    assert body["database_enabled"] is True
+    assert body["query"] == "temperature"
+    assert body["items"] == records
+    assert captured == {"query": "temperature", "limit": 25}
+
+
+def test_admin_result_update_delete_endpoints(monkeypatch: Any) -> None:
+    records: dict[str, dict[str, Any]] = {
+        "record-123": {
+            "id": "record-123",
+            "request_id": "request-123",
+            "input_text": "原始",
+            "result_json": {"fields": [{"key": "title", "value": "原始"}]},
+            "saved_files": [],
+            "created_at": "2026-06-25 00:00:00+00",
+        }
+    }
 
     def fake_update(record_id: str, input_text: str, result: dict[str, Any], saved_files: list[str] | None = None) -> bool:
         if record_id not in records:
@@ -548,19 +577,9 @@ def test_admin_result_create_update_delete_endpoints(monkeypatch: Any) -> None:
     def fake_delete(record_id: str) -> bool:
         return records.pop(record_id, None) is not None
 
-    monkeypatch.setattr(main, "create_extraction_result", fake_create)
     monkeypatch.setattr(main, "update_extraction_result", fake_update)
     monkeypatch.setattr(main, "delete_extraction_result", fake_delete)
     monkeypatch.setattr(main, "get_extraction_result", lambda record_id: records.get(record_id))
-
-    create_response = client.post(
-        "/api/admin/results",
-        json={"input_text": "新增", "result_json": {"fields": [{"key": "title", "value": "新增"}]}},
-    )
-
-    assert create_response.status_code == 200
-    assert create_response.json()["data"]["id"] == "record-123"
-    assert create_response.json()["data"]["input_text"] == "新增"
 
     update_response = client.put(
         "/api/admin/results/record-123",
