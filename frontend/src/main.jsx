@@ -41,6 +41,38 @@ class ErrorBoundary extends React.Component {
 }
 
 
+
+function getSavedFileName(filePath) {
+  return String(filePath || '').split(/[\\/]/).pop() || '原文件';
+}
+
+function isImageFile(filePath) {
+  return /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(getSavedFileName(filePath));
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function downloadExcel(record) {
+  if (!record) return;
+  const response = await fetch(`${API_BASE}/export/excel`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ data: record.result_json || {} }),
+  });
+  if (!response.ok) throw new Error('Excel 导出失败');
+  const blob = await response.blob();
+  downloadBlob(blob, `${record.id || 'result'}.xlsx`);
+}
+
 function formatCellValue(value) {
   if (value === null || value === undefined || value === '') return '—';
   if (typeof value === 'object') return JSON.stringify(value);
@@ -83,13 +115,14 @@ function buildResultRows(result) {
   return rows;
 }
 
-function ResultTable({ record }) {
+function ResultTable({ record, onEdit, onDelete }) {
   if (!record) return <div className="result-empty">选择一条记录后查看结构化结果。</div>;
 
   const result = record.result_json || {};
   const documentInfo = result.document_info || {};
   const rows = buildResultRows(result);
   const warnings = Array.isArray(result.warnings) ? result.warnings : [];
+  const savedFiles = Array.isArray(record.saved_files) ? record.saved_files : [];
 
   return <div className="result-panel">
     <section className="result-summary">
@@ -100,8 +133,27 @@ function ResultTable({ record }) {
         <div><dt>文档编号</dt><dd>{documentInfo.id || '—'}</dd></div>
         <div><dt>置信度</dt><dd>{documentInfo.confidence ?? '—'}</dd></div>
       </dl>
-      {result.raw_text && <p className="raw-text"><strong>原始文本：</strong>{result.raw_text}</p>}
+      <div className="result-actions">
+        <button type="button" onClick={() => downloadExcel(record)}>导出 Excel</button>
+        <button type="button" onClick={() => onEdit(record)}>编辑</button>
+        <button type="button" className="danger" onClick={() => onDelete(record)}>删除</button>
+      </div>
     </section>
+
+    {savedFiles.length > 0 && <section className="source-files">
+      <h3>原图片/文件</h3>
+      <div className="source-file-grid">
+        {savedFiles.map((filePath, index) => {
+          const fileUrl = `${API_BASE}/admin/results/${record.id}/files/${index}`;
+          const fileName = getSavedFileName(filePath);
+          return <article className="source-file-card" key={`${fileName}-${index}`}>
+            {isImageFile(filePath) && <img src={fileUrl} alt={fileName} loading="lazy" />}
+            <span>{fileName}</span>
+            <a href={fileUrl} download={fileName}>下载原图/文件</a>
+          </article>;
+        })}
+      </div>
+    </section>}
 
     <div className="result-table-wrap">
       <table className="result-table">
@@ -149,6 +201,12 @@ function App() {
   const [databaseEnabled, setDatabaseEnabled] = useState(false);
   const [selectedRecord, setSelectedRecord] = useState(null);
   const [adminError, setAdminError] = useState('');
+  const [editorMode, setEditorMode] = useState(null);
+  const [editorRecordId, setEditorRecordId] = useState('');
+  const [editorInputText, setEditorInputText] = useState('');
+  const [editorResultJson, setEditorResultJson] = useState('');
+  const [editorSavedFiles, setEditorSavedFiles] = useState('');
+  const [editorError, setEditorError] = useState('');
   const submittingRef = useRef(false);
 
   function describeFiles(selectedFiles) {
@@ -172,6 +230,73 @@ function App() {
     } finally {
       setAdminLoading(false);
     }
+  }
+
+
+  function openCreateEditor() {
+    setEditorMode('create');
+    setEditorRecordId('');
+    setEditorInputText('');
+    setEditorResultJson(JSON.stringify({ document_info: { title: '' }, sections: [], raw_text: '', warnings: [] }, null, 2));
+    setEditorSavedFiles('');
+    setEditorError('');
+  }
+
+  function openEditEditor(record) {
+    setEditorMode('edit');
+    setEditorRecordId(record.id);
+    setEditorInputText(record.input_text || '');
+    setEditorResultJson(JSON.stringify(record.result_json || {}, null, 2));
+    setEditorSavedFiles((record.saved_files || []).join('\n'));
+    setEditorError('');
+  }
+
+  function closeEditor() {
+    setEditorMode(null);
+    setEditorError('');
+  }
+
+  async function saveEditor() {
+    setEditorError('');
+    let resultJson;
+    try {
+      resultJson = JSON.parse(editorResultJson || '{}');
+    } catch (error) {
+      setEditorError('结果 JSON 格式不正确，请检查后再保存。');
+      return;
+    }
+
+    const payload = {
+      input_text: editorInputText,
+      result_json: resultJson,
+      saved_files: editorSavedFiles.split('\n').map((item) => item.trim()).filter(Boolean),
+    };
+    const isEdit = editorMode === 'edit';
+    const response = await fetch(isEdit ? `${API_BASE}/admin/results/${editorRecordId}` : `${API_BASE}/admin/results`, {
+      method: isEdit ? 'PUT' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const json = await response.json();
+    if (!response.ok || json.code !== 0) {
+      setEditorError(json.message || '保存失败。');
+      return;
+    }
+    setSelectedRecord(json.data);
+    closeEditor();
+    loadAdminResults();
+  }
+
+  async function deleteRecord(record) {
+    if (!record || !window.confirm(`确认删除记录 ${record.id}？`)) return;
+    const response = await fetch(`${API_BASE}/admin/results/${record.id}`, { method: 'DELETE' });
+    const json = await response.json();
+    if (!response.ok || json.code !== 0) {
+      setAdminError(json.message || '删除失败。');
+      return;
+    }
+    setSelectedRecord(null);
+    loadAdminResults();
   }
 
   useEffect(() => {
@@ -284,9 +409,29 @@ function App() {
             <strong>{databaseEnabled ? '数据库已连接' : '数据库未连接'}</strong>
             <p>{databaseEnabled ? `共 ${adminItems.length} 条记录` : '请在 Render 为 Web Service 设置 DATABASE_URL。'}</p>
           </div>
-          <button onClick={loadAdminResults} disabled={adminLoading}><RefreshCw size={16} />{adminLoading ? '加载中' : '刷新'}</button>
+          <div className="admin-toolbar-actions">
+            <button onClick={openCreateEditor}>新增记录</button>
+            <button onClick={loadAdminResults} disabled={adminLoading}><RefreshCw size={16} />{adminLoading ? '加载中' : '刷新'}</button>
+          </div>
         </div>
         {adminError && <p className="admin-error">{adminError}</p>}
+        {editorMode && <section className="admin-editor">
+          <div className="admin-editor-header">
+            <strong>{editorMode === 'edit' ? '编辑记录' : '新增记录'}</strong>
+            <button type="button" onClick={closeEditor}>关闭</button>
+          </div>
+          <label>输入说明
+            <input value={editorInputText} onChange={(event) => setEditorInputText(event.target.value)} placeholder="输入说明" />
+          </label>
+          <label>结果 JSON
+            <textarea value={editorResultJson} onChange={(event) => setEditorResultJson(event.target.value)} rows={8} />
+          </label>
+          <label>原文件路径（每行一个，可选）
+            <textarea value={editorSavedFiles} onChange={(event) => setEditorSavedFiles(event.target.value)} rows={3} />
+          </label>
+          {editorError && <p className="admin-error">{editorError}</p>}
+          <button type="button" onClick={saveEditor}>保存</button>
+        </section>}
         <div className="admin-content">
           <div className="record-list">
             {adminItems.length === 0 && <p className="empty-state">暂无保存记录。</p>}
@@ -296,7 +441,7 @@ function App() {
               <small>{item.id}</small>
             </button>)}
           </div>
-          <ResultTable record={activeRecord} />
+          <ResultTable record={activeRecord} onEdit={openEditEditor} onDelete={deleteRecord} />
         </div>
       </section>}
     </section>
